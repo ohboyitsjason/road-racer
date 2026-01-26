@@ -51,7 +51,7 @@ export function getLocalEndpoint(pieceType) {
             localEndX = radius * (1 - Math.cos(angle));
             localEndZ = radius * Math.sin(angle);
         }
-        localEndHeading = angle * dir;
+        localEndHeading = -(angle * dir);
     } else {
         localEndZ = def.length;
         localEndHeading = 0;

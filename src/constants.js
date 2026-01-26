@@ -22,13 +22,14 @@ export const AI_CONFIG = {
     names: ['Blue Bolt', 'Orange Fury', 'Purple Storm']
 };
 
-// Piece data (without createMesh references - those are added in pieces.js)
+// Grid unit = 5, base piece = 4 grid squares = 20 units
+// Curve radius = straight length so loops close on the grid
 export const PIECE_DATA = {
-    'start':          { length: 15, curveAngle: 0, curveRadius: 0, isStart: true },
-    'straight-short': { length: 15, curveAngle: 0, curveRadius: 0 },
-    'straight-long':  { length: 30, curveAngle: 0, curveRadius: 0 },
-    'curve-45':       { length: 0, curveAngle: Math.PI / 4, curveRadius: 25, direction: 1 },
-    'curve-90':       { length: 0, curveAngle: Math.PI / 2, curveRadius: 25, direction: 1 },
-    'jump-ramp':      { length: 30, curveAngle: 0, curveRadius: 0, isObstacle: true, obstacleType: 'jump' },
-    'sand-pit':       { length: 30, curveAngle: 0, curveRadius: 0, isObstacle: true, obstacleType: 'sand' }
+    'start':          { length: 20, curveAngle: 0, curveRadius: 0, isStart: true },
+    'straight-short': { length: 20, curveAngle: 0, curveRadius: 0 },
+    'straight-long':  { length: 40, curveAngle: 0, curveRadius: 0 },
+    'curve-45':       { length: 0, curveAngle: Math.PI / 4, curveRadius: 20, direction: 1 },
+    'curve-90':       { length: 0, curveAngle: Math.PI / 2, curveRadius: 20, direction: 1 },
+    'jump-ramp':      { length: 40, curveAngle: 0, curveRadius: 0, isObstacle: true, obstacleType: 'jump' },
+    'sand-pit':       { length: 40, curveAngle: 0, curveRadius: 0, isObstacle: true, obstacleType: 'sand' }
 };

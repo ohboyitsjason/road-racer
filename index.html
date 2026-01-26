@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Road Racer - Build & Race</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            display: flex;
+            gap: 10px;
+        }
+        .btn {
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: #4CAF50; color: white; }
+        .btn-primary:hover { background: #45a049; }
+        .btn-secondary { background: #2196F3; color: white; }
+        .btn-secondary:hover { background: #1976D2; }
+        .btn-danger { background: #f44336; color: white; }
+        .btn-danger:hover { background: #d32f2f; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+
+        #piece-library {
+            position: absolute;
+            left: 20px;
+            top: 80px;
+            background: rgba(0,0,0,0.85);
+            border-radius: 12px;
+            padding: 15px;
+            z-index: 100;
+            display: none;
+            max-height: calc(100vh - 120px);
+            overflow-y: auto;
+        }
+        #piece-library h3 {
+            color: white;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        .piece-category {
+            margin-bottom: 15px;
+        }
+        .piece-category h4 {
+            color: #aaa;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        .piece-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+        }
+        .piece-btn {
+            background: #333;
+            border: 2px solid #555;
+            border-radius: 8px;
+            padding: 10px;
+            cursor: grab;
+            transition: all 0.2s;
+            text-align: center;
+            user-select: none;
+        }
+        .piece-btn:hover {
+            background: #444;
+            border-color: #4CAF50;
+        }
+        .piece-btn.selected {
+            background: #4CAF50;
+            border-color: #4CAF50;
+        }
+        .piece-btn:active {
+            cursor: grabbing;
+        }
+        .piece-btn .icon {
+            font-size: 28px;
+            display: block;
+            margin-bottom: 5px;
+            pointer-events: none;
+        }
+        .piece-btn .label {
+            color: white;
+            font-size: 11px;
+            pointer-events: none;
+        }
+        .drag-preview {
+            position: fixed;
+            pointer-events: none;
+            z-index: 1000;
+            background: rgba(76, 175, 80, 0.9);
+            border: 2px solid #4CAF50;
+            border-radius: 8px;
+            padding: 10px 15px;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        .drop-zone-indicator {
+            position: absolute;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(76, 175, 80, 0.9);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            z-index: 100;
+            display: none;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: translateX(-50%) scale(1); }
+            50% { transform: translateX(-50%) scale(1.05); }
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 100;
+            max-width: 700px;
+        }
+        #race-info {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            font-size: 18px;
+            z-index: 100;
+            display: none;
+        }
+        #race-info h3 { margin-bottom: 10px; color: #4CAF50; }
+        .position-1 { color: #FFD700; }
+        .position-2 { color: #C0C0C0; }
+        .position-3 { color: #CD7F32; }
+        .position-4 { color: #888; }
+        #speedometer {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.8);
+            color: #0f0;
+            padding: 15px 25px;
+            border-radius: 10px;
+            font-size: 32px;
+            font-family: 'Courier New', monospace;
+            z-index: 100;
+            display: none;
+        }
+        #leaderboard { margin-top: 10px; font-size: 14px; }
+        .leader-entry { padding: 3px 0; }
+        .player-entry { color: #4CAF50; font-weight: bold; }
+        #gear-indicator { font-size: 18px; color: #ff0; margin-top: 5px; }
+
+        #track-status {
+            position: absolute;
+            top: 80px;
+            right: 20px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 100;
+        }
+        #track-status.valid { border-left: 4px solid #4CAF50; }
+        #track-status.invalid { border-left: 4px solid #f44336; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+
+    <div id="ui">
+        <button id="build-btn" class="btn btn-primary">Build Track</button>
+        <button id="race-btn" class="btn btn-secondary" disabled>Start Race</button>
+        <button id="clear-btn" class="btn btn-danger">Clear</button>
+    </div>
+
+    <div id="piece-library">
+        <h3>Track Pieces</h3>
+
+        <div class="piece-category">
+            <h4>Start/Finish</h4>
+            <div class="piece-grid">
+                <div class="piece-btn" data-piece="start">
+                    <span class="icon">🏁</span>
+                    <span class="label">Start/Finish</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="piece-category">
+            <h4>Straight</h4>
+            <div class="piece-grid">
+                <div class="piece-btn" data-piece="straight-short">
+                    <span class="icon">━</span>
+                    <span class="label">Short</span>
+                </div>
+                <div class="piece-btn" data-piece="straight-long">
+                    <span class="icon">━━</span>
+                    <span class="label">Long</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="piece-category">
+            <h4>Curves</h4>
+            <div class="piece-grid">
+                <div class="piece-btn" data-piece="curve-45">
+                    <span class="icon">↱</span>
+                    <span class="label">Curve 45°</span>
+                </div>
+                <div class="piece-btn" data-piece="curve-90">
+                    <span class="icon">╮</span>
+                    <span class="label">Curve 90°</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="piece-category">
+            <h4>Special</h4>
+            <div class="piece-grid">
+                <div class="piece-btn" data-piece="jump-ramp">
+                    <span class="icon">⛰️</span>
+                    <span class="label">Jump Ramp</span>
+                </div>
+                <div class="piece-btn" data-piece="sand-pit">
+                    <span class="icon">🏜️</span>
+                    <span class="label">Sand Pit</span>
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #444;">
+            <div class="piece-btn" data-piece="delete" style="background: #f44336;">
+                <span class="icon">🗑️</span>
+                <span class="label">Delete Last</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="track-status" class="invalid">
+        Pieces: 0 | Track: Open
+    </div>
+
+    <div id="instructions">
+        Click "Build Track" to start building your track from pieces!
+    </div>
+
+    <div id="race-info">
+        <h3>Race Status</h3>
+        <div>Lap: <span id="lap-num">0</span> / 3</div>
+        <div>Time: <span id="race-time">0:00</span></div>
+        <div id="leaderboard"></div>
+    </div>
+
+    <div id="speedometer">
+        <span id="speed-value">0</span> MPH
+        <div id="gear-indicator">N</div>
+    </div>
+
+    <div class="drop-zone-indicator" id="drop-indicator">
+        Drop to place piece!
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module" src="src/main.js"></script>
+</body>
+</html>

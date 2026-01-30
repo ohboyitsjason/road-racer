@@ -39,7 +39,7 @@ export class RacingLine {
 
         // Backward pass: propagate braking constraints
         for (let i = resolution - 2; i >= 0; i--) {
-            const maxDecel = PHYSICS.brakeForce;
+            const maxDecel = 12; // m/s^2 deceleration
             const dist = this.waypoints[i].position.distanceTo(this.waypoints[i + 1].position);
             const maxSpeedFromNext = Math.sqrt(this.optimalSpeeds[i + 1] ** 2 + 2 * maxDecel * dist);
             this.optimalSpeeds[i] = Math.min(this.optimalSpeeds[i], maxSpeedFromNext);

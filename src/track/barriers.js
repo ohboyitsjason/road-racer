@@ -9,12 +9,12 @@ export function addBarriersToStraight(group, length, width) {
 
     [-1, 1].forEach(side => {
         for (let i = 0; i < numSegments; i++) {
-            const barrierGeom = new THREE.BoxGeometry(0.5, 0.8, segmentLength);
+            const barrierGeom = new THREE.BoxGeometry(.5, 2.5, segmentLength);
             const mat = i % 2 === 0 ? barrierMat1 : barrierMat2;
             const barrier = new THREE.Mesh(barrierGeom, mat);
             barrier.position.set(
                 side * (width / 2 + 0.25),
-                0.4,
+                1.25,
                 i * segmentLength + segmentLength / 2
             );
             barrier.castShadow = true;
@@ -50,11 +50,12 @@ export function addBarriersToCurve(group, radius, angle, dir, width) {
             }
 
             const segLen = Math.sqrt((x2 - x1) ** 2 + (z2 - z1) ** 2);
-            const barrierGeom = new THREE.BoxGeometry(0.5, 0.8, segLen + 0.1);
+            const barrierGeom = new THREE.BoxGeometry(0.5, 2.5, segLen + 0.1);
             const mat = i % 2 === 0 ? barrierMat1 : barrierMat2;
             const barrier = new THREE.Mesh(barrierGeom, mat);
-            barrier.position.set((x1 + x2) / 2, 0.4, (z1 + z2) / 2);
-            barrier.lookAt((x1 + x2) / 2 + (x2 - x1), 0.4, (z1 + z2) / 2 + (z2 - z1));
+            barrier.position.set((x1 + x2) / 2, 1.25, (z1 + z2) / 2);
+            // Only rotate around Y-axis to follow curve, keeping barrier vertical
+            barrier.rotation.y = Math.atan2(x2 - x1, z2 - z1);
             barrier.castShadow = true;
             group.add(barrier);
         }

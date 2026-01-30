@@ -9,8 +9,71 @@ import { placePiece } from './track/placement.js';
 import { createCar } from './car/car.js';
 import { setupAICars } from './ai/aiCars.js';
 import { updateTrackStatus } from './track/trackState.js';
+import { rebuildTrackMeshCache } from './car/surfacePhysics.js';
 
 export function setupEventListeners() {
+    // Title screen - Start Building function
+    function startBuilding() {
+        const titleScreen = document.getElementById('title-screen');
+        if (titleScreen.style.display === 'none') return; // Already started
+
+        titleScreen.classList.add('hidden');
+
+        // Show game UI
+        document.getElementById('ui').style.display = 'flex';
+        document.getElementById('instructions').style.display = 'block';
+
+        // Remove title screen from DOM after animation
+        setTimeout(() => {
+            titleScreen.style.display = 'none';
+        }, 500);
+
+        // Go directly into build mode
+        document.getElementById('build-btn').click();
+    }
+
+    document.getElementById('start-game-btn').addEventListener('click', startBuilding);
+
+    // Keyboard support for title screen
+    document.addEventListener('keydown', (e) => {
+        const titleScreen = document.getElementById('title-screen');
+        const howToPlayModal = document.getElementById('how-to-play-modal');
+
+        // Close how to play modal with Escape
+        if (e.key === 'Escape' && howToPlayModal.style.display === 'flex') {
+            howToPlayModal.style.display = 'none';
+            return;
+        }
+
+        // Start building with Enter or Space from title screen
+        if ((e.key === 'Enter' || e.key === ' ') && titleScreen.style.display !== 'none') {
+            // Don't start if how to play modal is open
+            if (howToPlayModal.style.display === 'flex') {
+                howToPlayModal.style.display = 'none';
+                return;
+            }
+            e.preventDefault();
+            startBuilding();
+        }
+    });
+
+    // How to Play button
+    document.getElementById('how-to-play-btn').addEventListener('click', () => {
+        document.getElementById('how-to-play-modal').style.display = 'flex';
+    });
+
+    // Close How to Play modal
+    document.getElementById('close-how-to-play').addEventListener('click', () => {
+        document.getElementById('how-to-play-modal').style.display = 'none';
+    });
+
+    // Close modal on background click
+    document.getElementById('how-to-play-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'how-to-play-modal') {
+            document.getElementById('how-to-play-modal').style.display = 'none';
+        }
+    });
+
     // Build button
     document.getElementById('build-btn').addEventListener('click', () => {
         state.setGameState('building');
@@ -21,11 +84,16 @@ export function setupEventListeners() {
         gridHelper.visible = true;
         controls.enabled = true;
 
-        camera.position.set(0, 150, 0.1);
-        camera.lookAt(0, 0, 0);
-        controls.target.set(0, 0, 0);
-        setBuildModeCamera();
-        controls.update();
+        // Show direction arrows in build mode
+        state.trackElements.forEach(element => {
+            element.traverse(child => {
+                if (child.name === 'directionArrow') {
+                    child.visible = true;
+                }
+            });
+        });
+
+        setBuildModeCamera(); // Sets isometric camera position and controls
 
         document.getElementById('instructions').textContent = 'Drag pieces onto grid. R to rotate. Drag placed pieces back to library to remove them.';
     });
@@ -42,6 +110,18 @@ export function setupEventListeners() {
         setRaceModeCamera();
 
         buildRoadCurve();
+
+        // Hide direction arrows during race
+        state.trackElements.forEach(element => {
+            element.traverse(child => {
+                if (child.name === 'directionArrow') {
+                    child.visible = false;
+                }
+            });
+        });
+
+        // Initialize raycast-based surface detection cache
+        rebuildTrackMeshCache();
 
         if (!state.car) {
             state.setCar(createCar(0xff0000, true));
@@ -62,9 +142,21 @@ export function setupEventListeners() {
             isAirborne: false,
             airborneTime: 0,
             verticalVelocity: 0,
-            groundY: 0.1
+            groundY: 0.1,
+            inLoop: false,
+            steerAngle: 0,
+            lastAccel: 0,
+            isDrifting: false,
+            driftAmount: 0,
+            velocityHeading: startPiece.heading,
+            driftDirection: 0,
+            collisionRecovery: 0,
+            spinVelocity: 0,
+            // Surface physics
+            onSurface: true,
+            surfaceNormal: new THREE.Vector3(0, 1, 0)
         });
-        state.playerPhysics.position.y = 0.1;
+        state.playerPhysics.position.y = 0.7; // Start above track surface (0.15) + car height (0.5)
 
         state.car.position.copy(state.playerPhysics.position);
         state.car.rotation.y = state.playerPhysics.heading;
@@ -72,8 +164,15 @@ export function setupEventListeners() {
         state.setLapCount(0);
         state.setLastCheckpoint(0);
         state.setRaceStartTime(Date.now());
+        state.setTopSpeed(0);
+        state.setPlayerFinished(false);
 
-        document.getElementById('instructions').textContent = 'Arrow keys/WASD to drive! Complete 3 laps to win!';
+        // Blur any focused buttons so space doesn't click them
+        if (document.activeElement) {
+            document.activeElement.blur();
+        }
+
+        document.getElementById('instructions').textContent = 'Arrow keys/WASD to drive. SPACE + turn to drift! Complete 3 laps to win!';
         document.getElementById('race-info').style.display = 'block';
         document.getElementById('speedometer').style.display = 'block';
         document.getElementById('lap-num').textContent = '0';
@@ -87,15 +186,27 @@ export function setupEventListeners() {
         document.getElementById('track-status').style.display = 'none';
         document.getElementById('race-info').style.display = 'none';
         document.getElementById('speedometer').style.display = 'none';
+        document.getElementById('finish-screen').style.display = 'none';
         gridHelper.visible = false;
         controls.enabled = true;
         document.getElementById('race-btn').disabled = true;
         document.getElementById('instructions').textContent = 'Click "Build Track" to start building your track from pieces!';
-        camera.position.set(0, 150, 0.1);
-        camera.lookAt(0, 0, 0);
-        controls.target.set(0, 0, 0);
-        setBuildModeCamera();
-        controls.update();
+        document.getElementById('instructions').style.display = 'block';
+        setBuildModeCamera(); // Sets isometric camera position and controls
+    });
+
+    // Restart button (on finish screen)
+    document.getElementById('restart-btn').addEventListener('click', () => {
+        // Hide finish screen
+        document.getElementById('finish-screen').style.display = 'none';
+        const celebration = document.getElementById('finish-celebration');
+        celebration.classList.remove('show', 'slide-up');
+        celebration.style.display = 'block';
+        document.getElementById('finish-summary').classList.remove('show');
+
+        // Restart race by clicking race button
+        document.getElementById('race-btn').click();
+        document.getElementById('instructions').style.display = 'block';
     });
 
     // Piece selection - drag and drop

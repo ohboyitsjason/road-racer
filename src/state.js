@@ -23,8 +23,12 @@ export let lapCount = 0;
 export function setLapCount(v) { lapCount = v; }
 export let raceStartTime = 0;
 export function setRaceStartTime(v) { raceStartTime = v; }
+export let topSpeed = 0;
+export function setTopSpeed(v) { topSpeed = v; }
 export let lastCheckpoint = 0;
 export function setLastCheckpoint(v) { lastCheckpoint = v; }
+export let playerFinished = false;
+export function setPlayerFinished(v) { playerFinished = v; }
 
 export let playerPhysics = {
     position: new THREE.Vector3(),
@@ -36,7 +40,19 @@ export let playerPhysics = {
     isAirborne: false,
     airborneTime: 0,
     verticalVelocity: 0,
-    groundY: 0.1
+    groundY: 0.1,
+    inLoop: false,
+    // Steering
+    steerAngle: 0,            // Current steering angle in radians
+    lastAccel: 0,             // Last frame's acceleration (for weight transfer)
+    // Drift state
+    isDrifting: false,
+    driftAmount: 0,           // 0-1, how much grip is lost
+    velocityHeading: 0,       // Direction car is actually moving
+    driftDirection: 0,        // -1 left, 1 right, 0 none
+    // Collision state
+    collisionRecovery: 0,     // Time remaining for reduced grip after collision
+    spinVelocity: 0           // Angular velocity from collision
 };
 export function setPlayerPhysics(pp) { playerPhysics = pp; }
 

@@ -201,12 +201,349 @@
         }
         #track-status.valid { border-left: 4px solid #4CAF50; }
         #track-status.invalid { border-left: 4px solid #f44336; }
+
+        /* Race Finish Screen */
+        #finish-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 200;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        #finish-celebration {
+            text-align: center;
+            transform: scale(0);
+            transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        #finish-celebration.show {
+            transform: scale(1);
+        }
+        #finish-celebration.slide-up {
+            animation: slideUp 0.8s ease-in-out forwards;
+        }
+        @keyframes slideUp {
+            to {
+                transform: translateY(-100vh) scale(0.5);
+                opacity: 0;
+            }
+        }
+        .trophy-icon {
+            font-size: 120px;
+            margin-bottom: 20px;
+            animation: bounce 0.6s ease-in-out infinite alternate;
+        }
+        @keyframes bounce {
+            from { transform: translateY(0); }
+            to { transform: translateY(-20px); }
+        }
+        .position-text {
+            font-size: 72px;
+            font-weight: bold;
+            text-shadow: 0 0 30px currentColor;
+            margin-bottom: 10px;
+        }
+        .position-text.gold { color: #FFD700; }
+        .position-text.silver { color: #C0C0C0; }
+        .position-text.bronze { color: #CD7F32; }
+        .congrats-text {
+            font-size: 28px;
+            color: white;
+            margin-bottom: 30px;
+        }
+        #finish-summary {
+            text-align: center;
+            color: white;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+        }
+        #finish-summary.show {
+            opacity: 1;
+        }
+        #finish-summary h2 {
+            font-size: 36px;
+            margin-bottom: 30px;
+            color: #4CAF50;
+        }
+        .summary-stats {
+            display: flex;
+            gap: 40px;
+            justify-content: center;
+            margin-bottom: 30px;
+        }
+        .stat-box {
+            background: rgba(255,255,255,0.1);
+            padding: 20px 30px;
+            border-radius: 10px;
+        }
+        .stat-label {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        .stat-value {
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .final-standings {
+            margin-bottom: 30px;
+        }
+        .final-standings h3 {
+            font-size: 20px;
+            margin-bottom: 15px;
+            color: #888;
+        }
+        .standing-row {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            padding: 8px 0;
+            font-size: 18px;
+        }
+        .standing-row.player-row {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        .standing-position {
+            width: 30px;
+        }
+        .standing-name {
+            width: 150px;
+            text-align: left;
+        }
+        #restart-btn {
+            padding: 15px 40px;
+            font-size: 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, background 0.2s;
+        }
+        #restart-btn:hover {
+            background: #45a049;
+            transform: scale(1.05);
+        }
+
+        /* Title Screen */
+        #title-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            z-index: 300;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        #title-screen::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background:
+                radial-gradient(circle at 20% 80%, rgba(255, 107, 107, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(78, 205, 196, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 50% 50%, rgba(69, 160, 73, 0.05) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .title-container {
+            text-align: center;
+            z-index: 1;
+            animation: fadeInUp 1s ease-out;
+        }
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .game-title {
+            font-size: 80px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 8px;
+            margin-bottom: 10px;
+            background: linear-gradient(180deg, #fff 0%, #4CAF50 50%, #2d7a32 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-shadow: none;
+            filter: drop-shadow(0 4px 20px rgba(76, 175, 80, 0.4));
+        }
+        .game-subtitle {
+            font-size: 24px;
+            color: #888;
+            letter-spacing: 12px;
+            text-transform: uppercase;
+            margin-bottom: 60px;
+        }
+        .menu-container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            animation: fadeInUp 1s ease-out 0.3s both;
+        }
+        .menu-btn {
+            padding: 18px 60px;
+            font-size: 20px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .menu-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s ease;
+        }
+        .menu-btn:hover::before {
+            left: 100%;
+        }
+        .menu-btn-primary {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            box-shadow: 0 4px 20px rgba(76, 175, 80, 0.4);
+        }
+        .menu-btn-primary:hover {
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 0 8px 30px rgba(76, 175, 80, 0.6);
+        }
+        .menu-btn-secondary {
+            background: transparent;
+            color: #aaa;
+            border: 2px solid #444;
+        }
+        .menu-btn-secondary:hover {
+            border-color: #4CAF50;
+            color: #4CAF50;
+            transform: translateY(-2px);
+        }
+        .title-footer {
+            position: absolute;
+            bottom: 30px;
+            color: #555;
+            font-size: 14px;
+            letter-spacing: 2px;
+            animation: fadeInUp 1s ease-out 0.6s both;
+        }
+        .racing-stripes {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            overflow: hidden;
+        }
+        .stripe {
+            position: absolute;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, rgba(76, 175, 80, 0.3), transparent);
+            animation: stripeMove 3s linear infinite;
+        }
+        .stripe:nth-child(1) { top: 20%; width: 60%; animation-delay: 0s; }
+        .stripe:nth-child(2) { top: 40%; width: 80%; animation-delay: 0.5s; }
+        .stripe:nth-child(3) { top: 60%; width: 50%; animation-delay: 1s; }
+        .stripe:nth-child(4) { top: 80%; width: 70%; animation-delay: 1.5s; }
+        @keyframes stripeMove {
+            from { transform: translateX(-100%); }
+            to { transform: translateX(200vw); }
+        }
+        .checkered-accent {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 8px;
+            background: repeating-linear-gradient(
+                90deg,
+                #333 0px,
+                #333 20px,
+                #111 20px,
+                #111 40px
+            );
+        }
+        #title-screen.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.5s ease-out;
+        }
     </style>
 </head>
 <body>
     <div id="canvas-container"></div>
 
-    <div id="ui">
+    <!-- Title Screen -->
+    <div id="title-screen">
+        <div class="racing-stripes">
+            <div class="stripe"></div>
+            <div class="stripe"></div>
+            <div class="stripe"></div>
+            <div class="stripe"></div>
+        </div>
+        <div class="title-container">
+            <h1 class="game-title">Road Racer</h1>
+            <p class="game-subtitle">Build & Race</p>
+            <div class="menu-container">
+                <button id="start-game-btn" class="menu-btn menu-btn-primary">Start Building</button>
+                <button id="how-to-play-btn" class="menu-btn menu-btn-secondary">How to Play</button>
+            </div>
+        </div>
+        <div class="checkered-accent"></div>
+        <div class="title-footer">Build your track, then race!</div>
+    </div>
+
+    <!-- How to Play Modal -->
+    <div id="how-to-play-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); z-index: 350; align-items: center; justify-content: center;">
+        <div style="background: #1a1a2e; padding: 40px 50px; border-radius: 20px; max-width: 600px; color: white; text-align: left; border: 2px solid #4CAF50;">
+            <h2 style="color: #4CAF50; margin-bottom: 25px; font-size: 28px; text-align: center;">How to Play</h2>
+            <div style="margin-bottom: 20px;">
+                <h3 style="color: #fff; margin-bottom: 10px; font-size: 18px;">Building Your Track</h3>
+                <p style="color: #aaa; line-height: 1.6;">Drag track pieces from the library onto the grid. Press <strong style="color: #4CAF50;">R</strong> to rotate pieces. Connect them to form a closed loop with a start/finish line.</p>
+            </div>
+            <div style="margin-bottom: 20px;">
+                <h3 style="color: #fff; margin-bottom: 10px; font-size: 18px;">Racing Controls</h3>
+                <p style="color: #aaa; line-height: 1.6;">
+                    <strong style="color: #4CAF50;">Arrow Keys / WASD</strong> - Accelerate, Brake/Reverse, Steer<br>
+                    <strong style="color: #4CAF50;">SPACE + Steer</strong> - Drift
+                </p>
+            </div>
+            <div style="margin-bottom: 30px;">
+                <h3 style="color: #fff; margin-bottom: 10px; font-size: 18px;">Goal</h3>
+                <p style="color: #aaa; line-height: 1.6;">Complete 3 laps before the AI racers to win!</p>
+            </div>
+            <button id="close-how-to-play" class="menu-btn menu-btn-primary" style="width: 100%;">Got It!</button>
+        </div>
+    </div>
+
+    <div id="ui" style="display: none;">
         <button id="build-btn" class="btn btn-primary">Build Track</button>
         <button id="race-btn" class="btn btn-secondary" disabled>Start Race</button>
         <button id="clear-btn" class="btn btn-danger">Clear</button>
@@ -236,6 +573,10 @@
                     <span class="icon">━━</span>
                     <span class="label">Long</span>
                 </div>
+                <div class="piece-btn" data-piece="straight-extra">
+                    <span class="icon">━━━</span>
+                    <span class="label">Extra Long</span>
+                </div>
             </div>
         </div>
 
@@ -250,6 +591,10 @@
                     <span class="icon">╮</span>
                     <span class="label">Curve 90°</span>
                 </div>
+                <div class="piece-btn" data-piece="curve-banked">
+                    <span class="icon">⤴</span>
+                    <span class="label">Banked 90°</span>
+                </div>
             </div>
         </div>
 
@@ -263,6 +608,14 @@
                 <div class="piece-btn" data-piece="sand-pit">
                     <span class="icon">🏜️</span>
                     <span class="label">Sand Pit</span>
+                </div>
+                <div class="piece-btn" data-piece="ice-section">
+                    <span class="icon">❄️</span>
+                    <span class="label">Ice Section</span>
+                </div>
+                <div class="piece-btn" data-piece="loop">
+                    <span class="icon">🔄</span>
+                    <span class="label">Loop</span>
                 </div>
             </div>
         </div>
@@ -279,7 +632,7 @@
         Pieces: 0 | Track: Open
     </div>
 
-    <div id="instructions">
+    <div id="instructions" style="display: none;">
         Click "Build Track" to start building your track from pieces!
     </div>
 
@@ -297,6 +650,36 @@
 
     <div class="drop-zone-indicator" id="drop-indicator">
         Drop to place piece!
+    </div>
+
+    <div id="finish-screen">
+        <div id="finish-celebration">
+            <div class="trophy-icon" id="trophy-icon"></div>
+            <div class="position-text" id="position-text"></div>
+            <div class="congrats-text" id="congrats-text"></div>
+        </div>
+        <div id="finish-summary">
+            <h2>Race Complete</h2>
+            <div class="summary-stats">
+                <div class="stat-box">
+                    <div class="stat-label">Your Position</div>
+                    <div class="stat-value" id="summary-position"></div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Total Time</div>
+                    <div class="stat-value" id="summary-time"></div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Top Speed</div>
+                    <div class="stat-value" id="summary-speed"></div>
+                </div>
+            </div>
+            <div class="final-standings">
+                <h3>Final Standings</h3>
+                <div id="standings-list"></div>
+            </div>
+            <button id="restart-btn">Race Again</button>
+        </div>
     </div>
 
     <script type="importmap">

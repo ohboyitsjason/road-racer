@@ -3,6 +3,7 @@ import * as state from '../state.js';
 import { scene } from '../scene.js';
 import { getPieceEndpoint, getPieceEndpoints, removeEndpointMarkers } from './placement.js';
 import { PIECE_DEFS } from './pieces.js';
+import { PHYSICS } from '../constants.js';
 import { poofParticles } from '../effects/particles.js';
 
 // Build a connection map that tracks which endpoint connects to which
@@ -139,7 +140,7 @@ function generatePiecePoints(piece, resolution) {
 
 // Build the road curve for racing
 export function buildRoadCurve() {
-    const resolution = 10;
+    const resolution = 20; // Higher resolution for smoother curves
 
     const connections = buildConnectionMap();
     const result = traverseTrack(connections);
@@ -147,16 +148,203 @@ export function buildRoadCurve() {
 
     const points = [];
 
-    result.ordered.forEach(({ piece, reversed }) => {
+    result.ordered.forEach(({ piece, reversed }, index) => {
         const piecePoints = generatePiecePoints(piece, resolution);
         if (reversed) piecePoints.reverse();
-        points.push(...piecePoints);
+
+        // Skip first point of each piece after the first to avoid duplicates at seams
+        const startIndex = (index === 0) ? 0 : 1;
+        for (let i = startIndex; i < piecePoints.length; i++) {
+            points.push(piecePoints[i]);
+        }
     });
 
     if (points.length > 0) {
-        state.setRoadCurve(new THREE.CatmullRomCurve3(points));
-        state.roadCurve.closed = true;
+        // Use centripetal CatmullRom for smoother interpolation
+        state.setRoadCurve(new THREE.CatmullRomCurve3(points, true, 'centripetal', 0.5));
     }
+
+    // Update banked curve connections for smooth transitions
+    updateBankedCurveConnections(result.ordered);
+}
+
+// Update banked curve obstacle zones based on adjacent pieces
+function updateBankedCurveConnections(orderedPieces) {
+    const numPieces = orderedPieces.length;
+
+    orderedPieces.forEach(({ piece, reversed }, index) => {
+        // Find the obstacle zone for this piece
+        const pieceIndex = state.placedPieces.indexOf(piece);
+        const zone = state.obstacleZones.find(z => z.pieceIndex === pieceIndex);
+
+        if (!zone || zone.type !== 'banked') return;
+
+        // Get previous and next pieces (wrapping for closed loop)
+        const prevIndex = (index - 1 + numPieces) % numPieces;
+        const nextIndex = (index + 1) % numPieces;
+        const prevPiece = orderedPieces[prevIndex].piece;
+        const nextPiece = orderedPieces[nextIndex].piece;
+
+        // Check if adjacent pieces are also banked
+        const prevIsBanked = prevPiece.type === 'curve-banked';
+        const nextIsBanked = nextPiece.type === 'curve-banked';
+
+        // Determine which end connects to which based on reversed flag
+        // If not reversed: entry = start of piece, exit = end of piece
+        // If reversed: entry = end of piece, exit = start of piece
+        if (reversed) {
+            zone.entryTransition = !nextIsBanked;
+            zone.exitTransition = !prevIsBanked;
+        } else {
+            zone.entryTransition = !prevIsBanked;
+            zone.exitTransition = !nextIsBanked;
+        }
+
+        // Rebuild the banked curve mesh with updated transitions
+        rebuildBankedCurveMesh(piece, pieceIndex, zone);
+    });
+}
+
+// Rebuild a banked curve mesh with correct transitions
+function rebuildBankedCurveMesh(piece, pieceIndex, zone) {
+    const oldMesh = state.trackElements[pieceIndex];
+    if (!oldMesh) return;
+
+    // Remove old mesh
+    scene.remove(oldMesh);
+
+    // Create new mesh with updated transitions
+    const def = piece.def;
+    const group = createBankedCurveWithTransitions(def, zone.entryTransition, zone.exitTransition);
+    group.position.copy(piece.position);
+    group.rotation.y = piece.heading;
+    scene.add(group);
+
+    // Update reference
+    state.trackElements[pieceIndex] = group;
+}
+
+// Smootherstep function for extra smooth transitions
+function smootherstep(t) {
+    return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+// Create banked curve with configurable transitions
+function createBankedCurveWithTransitions(def, entryTransition, exitTransition) {
+    const group = new THREE.Group();
+    const width = PHYSICS.trackWidth * 2;
+    const radius = def.curveRadius;
+    const angle = def.curveAngle;
+    const dir = def.direction;
+    const maxBankAngle = def.bankAngle || 0.3;
+
+    // More segments for larger curves
+    const segments = angle > Math.PI / 2 ? 48 : 32;
+    const innerR = radius - width / 2;
+    const outerR = radius + width / 2;
+    // Larger transition for 90° curves, smaller for 180° (keeps arc length similar)
+    const transitionLength = angle > Math.PI / 2 ? 0.2 : 0.35;
+
+    const vertices = [];
+    const indices = [];
+
+    for (let i = 0; i <= segments; i++) {
+        const t = i / segments;
+        const a = t * angle;
+
+        // Calculate banking with configurable transitions using smootherstep
+        let bankFactor = 1;
+        if (entryTransition && t < transitionLength) {
+            const tt = t / transitionLength;
+            bankFactor = smootherstep(tt);
+        } else if (exitTransition && t > 1 - transitionLength) {
+            const tt = (1 - t) / transitionLength;
+            bankFactor = smootherstep(tt);
+        }
+
+        const currentBankAngle = maxBankAngle * bankFactor;
+
+        let innerX, innerZ, outerX, outerZ;
+        const innerY = 0;
+        const outerY = Math.sin(currentBankAngle) * width;
+
+        if (dir > 0) {
+            innerX = -radius + innerR * Math.cos(a);
+            innerZ = innerR * Math.sin(a);
+            outerX = -radius + outerR * Math.cos(a);
+            outerZ = outerR * Math.sin(a);
+        } else {
+            innerX = radius - innerR * Math.cos(a);
+            innerZ = innerR * Math.sin(a);
+            outerX = radius - outerR * Math.cos(a);
+            outerZ = outerR * Math.sin(a);
+        }
+
+        vertices.push(innerX, innerY, innerZ);
+        vertices.push(outerX, outerY, outerZ);
+
+        if (i < segments) {
+            const base = i * 2;
+            indices.push(base, base + 1, base + 2);
+            indices.push(base + 1, base + 3, base + 2);
+        }
+    }
+
+    const roadGeom = new THREE.BufferGeometry();
+    roadGeom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    roadGeom.setIndex(indices);
+    roadGeom.computeVertexNormals();
+
+    const roadMat = new THREE.MeshStandardMaterial({
+        color: 0x444455,
+        side: THREE.DoubleSide
+    });
+    const road = new THREE.Mesh(roadGeom, roadMat);
+    road.position.y = 0.15;
+    road.receiveShadow = true;
+    group.add(road);
+
+    // Add outer wall with matching transitions
+    const wallSegments = 16;
+    const wallOffset = 1.2;
+
+    for (let i = 0; i < wallSegments; i++) {
+        const t = (i + 0.5) / wallSegments;
+        const a = t * angle;
+
+        let bankFactor = 1;
+        if (entryTransition && t < transitionLength) {
+            const tt = t / transitionLength;
+            bankFactor = tt * tt * (3 - 2 * tt);
+        } else if (exitTransition && t > 1 - transitionLength) {
+            const tt = (1 - t) / transitionLength;
+            bankFactor = tt * tt * (3 - 2 * tt);
+        }
+
+        const currentBankAngle = maxBankAngle * bankFactor;
+        const wallHeight = Math.sin(currentBankAngle) * width;
+
+        const wallR = outerR + wallOffset;
+        let x, z;
+        if (dir > 0) {
+            x = -radius + wallR * Math.cos(a);
+            z = wallR * Math.sin(a);
+        } else {
+            x = radius - wallR * Math.cos(a);
+            z = wallR * Math.sin(a);
+        }
+
+        const segmentLength = (angle * outerR) / wallSegments;
+        const wallGeom = new THREE.BoxGeometry(1.2, 2.5, segmentLength);
+        const wallMat = new THREE.MeshStandardMaterial({ color: i % 2 === 0 ? 0xff0000 : 0xffffff });
+        const wall = new THREE.Mesh(wallGeom, wallMat);
+        wall.position.set(x, wallHeight + 1.4, z);
+        wall.rotation.y = dir > 0 ? -a : a;
+        wall.castShadow = true;
+        group.add(wall);
+    }
+
+    return group;
 }
 
 // Clear all track elements

@@ -16,8 +16,8 @@ const WHEEL_OFFSETS = [
 
 // Cache for track meshes that can be hit by raycasts
 let trackMeshCache = [];
-let barrierMeshCache = [];
-let cacheValid = false;
+export let barrierMeshCache = [];
+export let cacheValid = false;
 
 // Car dimensions for collision
 const CAR_WIDTH = 2.0;
@@ -26,11 +26,16 @@ const CAR_HEIGHT = 1.5;
 
 // Check if a mesh is a barrier (for collision) vs drivable surface
 function isBarrierMesh(mesh) {
-    // Check if mesh material color suggests a barrier (red/white striped barriers)
+    // Check for explicit barrier tag first
+    if (mesh.userData && mesh.userData.isBarrier) {
+        return true;
+    }
+
+    // Fallback: Check if mesh material color suggests a barrier (red/white striped barriers)
     if (mesh.material && mesh.material.color) {
         const color = mesh.material.color;
-        // Red barrier
-        if (color.r > 0.8 && color.g < 0.3 && color.b < 0.3) {
+        // Red barrier (0xcc0000 = r:0.8, so use >= 0.7)
+        if (color.r >= 0.7 && color.g < 0.3 && color.b < 0.3) {
             return true;
         }
         // White barrier (but not road markings - check size)
@@ -344,16 +349,13 @@ export function checkBarrierCollision(position, velocity, heading, isAirborne = 
         collided: false,
         normal: new THREE.Vector3(),
         penetration: 0,
-        barrierTop: 0
+        barrierTop: 0,
+        impactSpeed: 0
     };
 
     if (barrierMeshCache.length === 0) {
         return result;
     }
-
-    // Cast rays in multiple horizontal directions from car position
-    const rayHeight = position.y + 0.5; // Ray at car body height
-    const rayOrigin = new THREE.Vector3(position.x, rayHeight, position.z);
 
     // Directions to check (forward, back, left, right, and diagonals)
     const cosH = Math.cos(heading);
@@ -370,42 +372,62 @@ export function checkBarrierCollision(position, velocity, heading, isAirborne = 
         new THREE.Vector3(-sinH - cosH, 0, -cosH + sinH).normalize()  // Back-left
     ];
 
-    const checkDistances = [CAR_LENGTH / 2, CAR_LENGTH / 2, CAR_WIDTH / 2, CAR_WIDTH / 2,
-                           CAR_LENGTH / 2, CAR_LENGTH / 2, CAR_LENGTH / 2, CAR_LENGTH / 2];
+    const checkDistances = [CAR_LENGTH / 2 + 1.0, CAR_LENGTH / 2 + 1.0, CAR_WIDTH / 2 + 0.8, CAR_WIDTH / 2 + 0.8,
+                           CAR_LENGTH / 2 + 0.8, CAR_LENGTH / 2 + 0.8, CAR_LENGTH / 2 + 0.8, CAR_LENGTH / 2 + 0.8];
+
+    // Add velocity-based direction to catch high-speed tunneling
+    const speed = velocity.length();
+    if (speed > 5) {
+        const velDir = velocity.clone().normalize();
+        velDir.y = 0;
+        if (velDir.length() > 0.1) {
+            velDir.normalize();
+            directions.push(velDir);
+            // Check further ahead at high speeds
+            checkDistances.push(CAR_LENGTH / 2 + Math.min(speed * 0.1, 3.0));
+        }
+    }
+
+    // Multiple ray heights for better coverage
+    const rayHeights = [0.2, 0.5, 0.9, 1.3]; // Low, low-mid, mid-high, high
 
     let closestHit = null;
     let closestDist = Infinity;
 
-    for (let i = 0; i < directions.length; i++) {
-        const dir = directions[i];
-        const checkDist = checkDistances[i] + 0.5; // Add small buffer
+    for (const heightOffset of rayHeights) {
+        const rayOrigin = new THREE.Vector3(position.x, position.y + heightOffset, position.z);
 
-        raycaster.set(rayOrigin, dir);
-        raycaster.far = checkDist;
+        for (let i = 0; i < directions.length; i++) {
+            const dir = directions[i];
+            const checkDist = checkDistances[i];
 
-        const intersects = raycaster.intersectObjects(barrierMeshCache, false);
+            raycaster.set(rayOrigin, dir);
+            raycaster.far = checkDist;
 
-        if (intersects.length > 0) {
-            const hit = intersects[0];
+            const intersects = raycaster.intersectObjects(barrierMeshCache, false);
 
-            // Get barrier height to check if car can jump over
-            const barrierGeom = hit.object.geometry;
-            if (!barrierGeom.boundingBox) {
-                barrierGeom.computeBoundingBox();
-            }
-            const worldPos = new THREE.Vector3();
-            hit.object.getWorldPosition(worldPos);
-            const barrierTop = worldPos.y + barrierGeom.boundingBox.max.y * hit.object.scale.y;
+            if (intersects.length > 0) {
+                const hit = intersects[0];
 
-            // If car is high enough to clear the barrier, skip collision
-            if (isAirborne && position.y > barrierTop + 0.5) {
-                continue;
-            }
+                // Get barrier height to check if car can jump over
+                const barrierGeom = hit.object.geometry;
+                if (!barrierGeom.boundingBox) {
+                    barrierGeom.computeBoundingBox();
+                }
+                const worldPos = new THREE.Vector3();
+                hit.object.getWorldPosition(worldPos);
+                const barrierTop = worldPos.y + barrierGeom.boundingBox.max.y * hit.object.scale.y;
 
-            if (hit.distance < closestDist) {
-                closestDist = hit.distance;
-                closestHit = hit;
-                result.barrierTop = barrierTop;
+                // If car is high enough to clear the barrier, skip collision
+                if (isAirborne && position.y > barrierTop + 0.5) {
+                    continue;
+                }
+
+                if (hit.distance < closestDist) {
+                    closestDist = hit.distance;
+                    closestHit = hit;
+                    result.barrierTop = barrierTop;
+                }
             }
         }
     }
@@ -432,7 +454,10 @@ export function checkBarrierCollision(position, velocity, heading, isAirborne = 
         }
 
         result.normal = hitNormal;
-        result.penetration = (CAR_WIDTH / 2 + 0.3) - closestDist;
+        result.penetration = Math.max(0.5, (CAR_WIDTH / 2 + 0.5) - closestDist);
+
+        // Calculate impact speed (velocity component into barrier)
+        result.impactSpeed = Math.abs(velocity.dot(hitNormal));
     }
 
     return result;
@@ -448,23 +473,23 @@ export function applyBarrierCollision(position, velocity, speed, heading, collis
     const newVelocity = velocity.clone();
 
     // Push car out of barrier with minimum distance to prevent getting stuck
-    const minPushOut = 0.5;
-    const pushDistance = Math.max(minPushOut, collision.penetration + 0.3);
+    const minPushOut = 1.0;
+    const pushDistance = Math.max(minPushOut, collision.penetration + 0.5);
     newPosition.add(collision.normal.clone().multiplyScalar(pushDistance));
 
-    // Reflect velocity off barrier with energy loss
+    // Reflect velocity off barrier - Mario Kart style bouncy walls
     const velocityDotNormal = newVelocity.dot(collision.normal);
     if (velocityDotNormal < 0) {
         // Only reflect if moving into the barrier
-        const restitution = 0.2; // Reduced bounce factor
+        const restitution = 0.6; // Bouncy! (Mario Kart style)
         const reflection = collision.normal.clone().multiplyScalar(-velocityDotNormal * (1 + restitution));
         newVelocity.add(reflection);
 
-        // Apply friction along barrier surface
+        // Less friction - keep more speed along wall
         const tangent = newVelocity.clone().sub(
             collision.normal.clone().multiplyScalar(newVelocity.dot(collision.normal))
         );
-        newVelocity.copy(tangent.multiplyScalar(0.85));
+        newVelocity.copy(tangent.multiplyScalar(0.92)); // Keep more speed
     }
 
     // Ensure velocity points away from barrier (prevent getting stuck)
@@ -485,15 +510,15 @@ export function applyBarrierCollision(position, velocity, speed, heading, collis
     return {
         position: newPosition,
         velocity: newVelocity,
-        speed: newSpeed * 0.8 // Reduced speed penalty
+        speed: newSpeed * 0.92 // Less speed loss - keep momentum (Mario Kart style)
     };
 }
 
-// Get surface type at a point (for grip modifiers)
+// Get surface type at a point (for grip modifiers and boost)
 export function getSurfaceType(position) {
     // Check obstacle zones for special surfaces
     for (const zone of state.obstacleZones) {
-        if (zone.type !== 'sand' && zone.type !== 'ice') continue;
+        if (zone.type !== 'sand' && zone.type !== 'ice' && zone.type !== 'boost') continue;
 
         const relPos = position.clone().sub(zone.position);
         const cosH = Math.cos(-zone.heading);

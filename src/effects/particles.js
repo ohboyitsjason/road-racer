@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { scene } from '../scene.js';
 
 export const poofParticles = [];
+export const driftSmokeParticles = [];
 
 export function createPoofEffect(position) {
     const particleCount = 20;
@@ -128,5 +129,98 @@ export function updatePoofParticles(delta) {
                 data.velocity.z *= 0.8;
             }
         }
+    }
+}
+
+// Tire smoke trail system
+let lastSmokeTime = 0;
+
+export function emitDriftSmoke(carPosition, carHeading, speed, slipIntensity) {
+    const now = performance.now() / 1000;
+
+    // Emission rate scales with slip intensity - more friction = more smoke
+    const baseInterval = 0.05;
+    const smokeInterval = baseInterval / Math.max(0.3, slipIntensity);
+
+    if (now - lastSmokeTime < smokeInterval) return;
+    lastSmokeTime = now;
+
+    // Emit from both rear wheels
+    const rearOffset = -1.5;
+    const wheelSpread = 1.2;
+
+    // More particles when slip is higher
+    const particlesPerWheel = slipIntensity > 0.7 ? 2 : 1;
+
+    [-1, 1].forEach(side => {
+        for (let p = 0; p < particlesPerWheel; p++) {
+            const localX = side * wheelSpread + (Math.random() - 0.5) * 0.3;
+            const localZ = rearOffset + (Math.random() - 0.5) * 0.5;
+
+            const worldX = carPosition.x + localX * Math.cos(carHeading) - localZ * Math.sin(carHeading);
+            const worldZ = carPosition.z + localX * Math.sin(carHeading) + localZ * Math.cos(carHeading);
+
+            // Size scales with intensity
+            const baseSize = 0.3 + slipIntensity * 0.4;
+            const size = baseSize + Math.random() * 0.2;
+            const geometry = new THREE.SphereGeometry(size, 6, 6);
+
+            // Opacity scales with intensity
+            const opacity = 0.3 + slipIntensity * 0.4;
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xbbbbbb,
+                transparent: true,
+                opacity: opacity
+            });
+
+            const smoke = new THREE.Mesh(geometry, material);
+            smoke.position.set(worldX, 0.2, worldZ);
+
+            // Velocity based on car movement
+            const spreadAngle = carHeading + Math.PI + (Math.random() - 0.5) * 0.8;
+            const speedFactor = speed * 0.03;
+            smoke.userData = {
+                velocity: new THREE.Vector3(
+                    Math.sin(spreadAngle) * speedFactor,
+                    0.3 + Math.random() * 0.4 + slipIntensity * 0.3,
+                    Math.cos(spreadAngle) * speedFactor
+                ),
+                life: 1,
+                decay: 0.8 + Math.random() * 0.3, // Slower decay for more visible trails
+                growRate: 1.2 + slipIntensity * 0.8 // Faster growth at high slip
+            };
+
+            scene.add(smoke);
+            driftSmokeParticles.push(smoke);
+        }
+    });
+}
+
+export function updateDriftSmoke(delta) {
+    for (let i = driftSmokeParticles.length - 1; i >= 0; i--) {
+        const smoke = driftSmokeParticles[i];
+        const data = smoke.userData;
+
+        data.life -= delta * data.decay;
+
+        if (data.life <= 0) {
+            scene.remove(smoke);
+            smoke.geometry.dispose();
+            smoke.material.dispose();
+            driftSmokeParticles.splice(i, 1);
+            continue;
+        }
+
+        // Update opacity and position
+        smoke.material.opacity = data.life * 0.5;
+        smoke.position.add(data.velocity.clone().multiplyScalar(delta));
+
+        // Slow down horizontal movement
+        data.velocity.x *= 0.98;
+        data.velocity.z *= 0.98;
+
+        // Grow the smoke puff
+        const growAmount = 1 + delta * data.growRate;
+        smoke.scale.multiplyScalar(growAmount);
     }
 }

@@ -92,10 +92,12 @@ export function checkTrackClosed() {
 // Update track status display
 export function updateTrackStatus() {
     state.setTrackClosed(checkTrackClosed());
-    const statusEl = document.getElementById('track-status');
-    statusEl.textContent = `Pieces: ${state.placedPieces.length} | Track: ${state.trackClosed ? 'Closed Loop \u2713' : 'Open'}${state.hasStart ? '' : ' | Need Start'}`;
-    statusEl.className = state.trackClosed && state.hasStart ? 'valid' : 'invalid';
-    document.getElementById('race-btn').disabled = !(state.trackClosed && state.hasStart);
+
+    // Show/hide race button based on track validity
+    const raceBtn = document.getElementById('race-btn');
+    const isTrackReady = state.trackClosed && state.hasStart;
+    raceBtn.style.display = isTrackReady ? 'block' : 'none';
+    raceBtn.disabled = !isTrackReady;
 }
 
 // Generate curve points for a single piece (start to end order)
@@ -369,8 +371,10 @@ export function clearTrack() {
     state.aiCars.forEach(ai => scene.remove(ai.mesh));
     state.aiCars.length = 0;
 
-    state.grandstands.forEach(g => scene.remove(g));
-    state.grandstands.length = 0;
+    // Clear decorations
+    state.decorationElements.forEach(el => scene.remove(el));
+    state.decorationElements.length = 0;
+    state.placedDecorations.length = 0;
 
     updateTrackStatus();
 }

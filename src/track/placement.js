@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import * as state from '../state.js';
 import { scene, raycaster, mouseVec, groundPlane, camera } from '../scene.js';
 import { PIECE_DEFS } from './pieces.js';
+import { DECORATION_DATA, PIECE_DATA, PHYSICS } from '../constants.js';
+import { obstacles } from '../obstacles/obstacleState.js';
 
 // Calculate piece endpoint (position and heading at the end of a placed piece)
 export function getPieceEndpoint(piece) {
@@ -81,12 +83,10 @@ export function getPieceEndpoints(piece) {
     };
 }
 
-// Check if a placement would overlap with existing pieces
+// Check if a placement would overlap with existing pieces or decorations
 export function checkPlacementValid(position, heading, pieceType, connectingTo = null) {
     const def = PIECE_DEFS[pieceType];
     if (!def) return false;
-
-    if (state.placedPieces.length === 0) return true;
 
     const newStart = position.clone();
     const localEnd = getLocalEndpoint(pieceType);
@@ -95,6 +95,7 @@ export function checkPlacementValid(position, heading, pieceType, connectingTo =
     const newEnd = position.clone().add(rotatedEnd);
     const newMid = newStart.clone().add(newEnd).multiplyScalar(0.5);
 
+    // Check against existing track pieces
     for (const piece of state.placedPieces) {
         if (connectingTo && piece === connectingTo) continue;
 
@@ -121,6 +122,74 @@ export function checkPlacementValid(position, heading, pieceType, connectingTo =
         const overlapThreshold = 18;
         if (midToMid < overlapThreshold) {
             return false;
+        }
+    }
+
+    // Check against decorations
+    if (state.placedDecorations && state.placedDecorations.length > 0) {
+        const pieceData = PIECE_DATA[pieceType];
+        if (pieceData) {
+            // Get track piece bounding box
+            let pieceWidth = 10; // Track width
+            let pieceLength = pieceData.length || (pieceData.curveRadius * pieceData.curveAngle);
+
+            // For curves, use a larger bounding area
+            if (pieceData.curveAngle > 0) {
+                pieceLength = pieceData.curveRadius * 2;
+                pieceWidth = pieceData.curveRadius * 2;
+            }
+
+            const pHalfW = pieceWidth / 2 + 5;
+            const pHalfL = pieceLength / 2 + 5;
+            const pCos = Math.cos(heading);
+            const pSin = Math.sin(heading);
+
+            // Calculate piece center
+            let pieceCenterX = position.x;
+            let pieceCenterZ = position.z;
+
+            if (pieceData.curveAngle > 0) {
+                const r = pieceData.curveRadius;
+                const dir = pieceData.direction;
+                if (dir > 0) {
+                    pieceCenterX = position.x + (-r * pCos);
+                    pieceCenterZ = position.z + (-r * pSin);
+                } else {
+                    pieceCenterX = position.x + (r * pCos);
+                    pieceCenterZ = position.z + (r * pSin);
+                }
+            } else {
+                pieceCenterX = position.x + pSin * (pieceLength / 2);
+                pieceCenterZ = position.z + pCos * (pieceLength / 2);
+            }
+
+            const pieceCorners = [
+                new THREE.Vector2(pieceCenterX + (-pHalfW * pCos - (-pHalfL) * pSin), pieceCenterZ + (-pHalfW * pSin + (-pHalfL) * pCos)),
+                new THREE.Vector2(pieceCenterX + (pHalfW * pCos - (-pHalfL) * pSin), pieceCenterZ + (pHalfW * pSin + (-pHalfL) * pCos)),
+                new THREE.Vector2(pieceCenterX + (pHalfW * pCos - pHalfL * pSin), pieceCenterZ + (pHalfW * pSin + pHalfL * pCos)),
+                new THREE.Vector2(pieceCenterX + (-pHalfW * pCos - pHalfL * pSin), pieceCenterZ + (-pHalfW * pSin + pHalfL * pCos))
+            ];
+
+            for (const deco of state.placedDecorations) {
+                const decoData = DECORATION_DATA[deco.type];
+                if (!decoData) continue;
+
+                const dHalfW = decoData.width / 2;
+                const dHalfD = decoData.depth / 2;
+                const dCos = Math.cos(deco.heading);
+                const dSin = Math.sin(deco.heading);
+
+                const decoCorners = [
+                    new THREE.Vector2(deco.position.x + (-dHalfW * dCos - (-dHalfD) * dSin), deco.position.z + (-dHalfW * dSin + (-dHalfD) * dCos)),
+                    new THREE.Vector2(deco.position.x + (dHalfW * dCos - (-dHalfD) * dSin), deco.position.z + (dHalfW * dSin + (-dHalfD) * dCos)),
+                    new THREE.Vector2(deco.position.x + (dHalfW * dCos - dHalfD * dSin), deco.position.z + (dHalfW * dSin + dHalfD * dCos)),
+                    new THREE.Vector2(deco.position.x + (-dHalfW * dCos - dHalfD * dSin), deco.position.z + (-dHalfW * dSin + dHalfD * dCos))
+                ];
+
+                if (polygonsOverlap(pieceCorners, decoCorners)) {
+                    return false;
+                }
+            }
         }
     }
 
@@ -347,7 +416,7 @@ export function removeEndpointMarkers(piece) {
         piece.endpointMarkers = null;
     }
 }
-
+//
 // Place a track piece at a specific position and heading
 // NOTE: Callers must call updateTrackStatus() after this function
 export function placePieceAt(type, position, heading) {
@@ -384,5 +453,281 @@ export function placePieceAt(type, position, heading) {
         });
     }
 
-    addEndpointMarkers(piece);
+    // Debug markers disabled - uncomment to see piece endpoints
+    // addEndpointMarkers(piece);
+}
+
+// Check if a decoration placement is valid (doesn't overlap with track pieces)
+export function checkDecorationPlacementValid(position, heading, decorationType) {
+    const decoData = DECORATION_DATA[decorationType];
+    if (!decoData) return false;
+
+    const decoWidth = decoData.width;
+    const decoDepth = decoData.depth;
+
+    // Get decoration corners (rotated)
+    const halfW = decoWidth / 2;
+    const halfD = decoDepth / 2;
+    const cos = Math.cos(heading);
+    const sin = Math.sin(heading);
+
+    const decoCorners = [
+        new THREE.Vector2(
+            position.x + (-halfW * cos - (-halfD) * sin),
+            position.z + (-halfW * sin + (-halfD) * cos)
+        ),
+        new THREE.Vector2(
+            position.x + (halfW * cos - (-halfD) * sin),
+            position.z + (halfW * sin + (-halfD) * cos)
+        ),
+        new THREE.Vector2(
+            position.x + (halfW * cos - halfD * sin),
+            position.z + (halfW * sin + halfD * cos)
+        ),
+        new THREE.Vector2(
+            position.x + (-halfW * cos - halfD * sin),
+            position.z + (-halfW * sin + halfD * cos)
+        )
+    ];
+
+    // Check against each placed track piece
+    for (const piece of state.placedPieces) {
+        const pieceData = PIECE_DATA[piece.type];
+        if (!pieceData) continue;
+
+        // Get track piece bounding box (approximation)
+        let pieceWidth = 10; // Track width
+        let pieceLength = pieceData.length || (pieceData.curveRadius * pieceData.curveAngle);
+
+        // For curves, use a larger bounding area
+        if (pieceData.curveAngle > 0) {
+            pieceLength = pieceData.curveRadius * 2;
+            pieceWidth = pieceData.curveRadius * 2;
+        }
+
+        const pHalfW = pieceWidth / 2 + 5; // Add buffer
+        const pHalfL = pieceLength / 2 + 5;
+        const pCos = Math.cos(piece.heading);
+        const pSin = Math.sin(piece.heading);
+
+        // Piece center (for straights, center is midpoint; for curves, approximate)
+        let pieceCenterX = piece.position.x;
+        let pieceCenterZ = piece.position.z;
+
+        if (pieceData.curveAngle > 0) {
+            // For curves, use the arc center
+            const r = pieceData.curveRadius;
+            const dir = pieceData.direction;
+            if (dir > 0) {
+                pieceCenterX = piece.position.x + (-r * pCos);
+                pieceCenterZ = piece.position.z + (-r * pSin);
+            } else {
+                pieceCenterX = piece.position.x + (r * pCos);
+                pieceCenterZ = piece.position.z + (r * pSin);
+            }
+        } else {
+            // For straights, center is at half length forward
+            pieceCenterX = piece.position.x + pSin * (pieceLength / 2);
+            pieceCenterZ = piece.position.z + pCos * (pieceLength / 2);
+        }
+
+        const pieceCorners = [
+            new THREE.Vector2(
+                pieceCenterX + (-pHalfW * pCos - (-pHalfL) * pSin),
+                pieceCenterZ + (-pHalfW * pSin + (-pHalfL) * pCos)
+            ),
+            new THREE.Vector2(
+                pieceCenterX + (pHalfW * pCos - (-pHalfL) * pSin),
+                pieceCenterZ + (pHalfW * pSin + (-pHalfL) * pCos)
+            ),
+            new THREE.Vector2(
+                pieceCenterX + (pHalfW * pCos - pHalfL * pSin),
+                pieceCenterZ + (pHalfW * pSin + pHalfL * pCos)
+            ),
+            new THREE.Vector2(
+                pieceCenterX + (-pHalfW * pCos - pHalfL * pSin),
+                pieceCenterZ + (-pHalfW * pSin + pHalfL * pCos)
+            )
+        ];
+
+        // Simple overlap check using separating axis theorem (simplified)
+        if (polygonsOverlap(decoCorners, pieceCorners)) {
+            return false;
+        }
+    }
+
+    // Also check against other decorations
+    for (const deco of state.placedDecorations) {
+        const otherDecoData = DECORATION_DATA[deco.type];
+        if (!otherDecoData) continue;
+
+        const oHalfW = otherDecoData.width / 2;
+        const oHalfD = otherDecoData.depth / 2;
+        const oCos = Math.cos(deco.heading);
+        const oSin = Math.sin(deco.heading);
+
+        const otherCorners = [
+            new THREE.Vector2(
+                deco.position.x + (-oHalfW * oCos - (-oHalfD) * oSin),
+                deco.position.z + (-oHalfW * oSin + (-oHalfD) * oCos)
+            ),
+            new THREE.Vector2(
+                deco.position.x + (oHalfW * oCos - (-oHalfD) * oSin),
+                deco.position.z + (oHalfW * oSin + (-oHalfD) * oCos)
+            ),
+            new THREE.Vector2(
+                deco.position.x + (oHalfW * oCos - oHalfD * oSin),
+                deco.position.z + (oHalfW * oSin + oHalfD * oCos)
+            ),
+            new THREE.Vector2(
+                deco.position.x + (-oHalfW * oCos - oHalfD * oSin),
+                deco.position.z + (-oHalfW * oSin + oHalfD * oCos)
+            )
+        ];
+
+        if (polygonsOverlap(decoCorners, otherCorners)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Simple polygon overlap check using separating axis theorem
+function polygonsOverlap(poly1, poly2) {
+    const polygons = [poly1, poly2];
+
+    for (const polygon of polygons) {
+        for (let i = 0; i < polygon.length; i++) {
+            const j = (i + 1) % polygon.length;
+            const edge = new THREE.Vector2(
+                polygon[j].x - polygon[i].x,
+                polygon[j].y - polygon[i].y
+            );
+            const normal = new THREE.Vector2(-edge.y, edge.x);
+
+            let min1 = Infinity, max1 = -Infinity;
+            for (const p of poly1) {
+                const proj = normal.x * p.x + normal.y * p.y;
+                min1 = Math.min(min1, proj);
+                max1 = Math.max(max1, proj);
+            }
+
+            let min2 = Infinity, max2 = -Infinity;
+            for (const p of poly2) {
+                const proj = normal.x * p.x + normal.y * p.y;
+                min2 = Math.min(min2, proj);
+                max2 = Math.max(max2, proj);
+            }
+
+            if (max1 < min2 || max2 < min1) {
+                return false; // Separating axis found
+            }
+        }
+    }
+
+    return true; // No separating axis found, polygons overlap
+}
+
+// Check if obstacle placement is valid (must be ON a track piece, not overlapping other obstacles)
+export function checkObstaclePlacementValid(position, size = PHYSICS.obstacle.crateSize) {
+    const halfSize = size / 2;
+
+    // Get obstacle corners (obstacles don't rotate for simplicity)
+    const obstacleCorners = [
+        new THREE.Vector2(position.x - halfSize, position.z - halfSize),
+        new THREE.Vector2(position.x + halfSize, position.z - halfSize),
+        new THREE.Vector2(position.x + halfSize, position.z + halfSize),
+        new THREE.Vector2(position.x - halfSize, position.z + halfSize)
+    ];
+
+    // Check if obstacle overlaps with ANY track piece (required)
+    let onTrack = false;
+
+    for (const piece of state.placedPieces) {
+        const pieceData = PIECE_DATA[piece.type];
+        if (!pieceData) continue;
+
+        // Get track piece bounding box
+        let pieceWidth = 10; // Track width
+        let pieceLength = pieceData.length || (pieceData.curveRadius * pieceData.curveAngle);
+
+        // For curves, use a larger bounding area
+        if (pieceData.curveAngle > 0) {
+            pieceLength = pieceData.curveRadius * 2;
+            pieceWidth = pieceData.curveRadius * 2;
+        }
+
+        const pHalfW = pieceWidth / 2;
+        const pHalfL = pieceLength / 2;
+        const pCos = Math.cos(piece.heading);
+        const pSin = Math.sin(piece.heading);
+
+        // Piece center
+        let pieceCenterX = piece.position.x;
+        let pieceCenterZ = piece.position.z;
+
+        if (pieceData.curveAngle > 0) {
+            const r = pieceData.curveRadius;
+            const dir = pieceData.direction;
+            if (dir > 0) {
+                pieceCenterX = piece.position.x + (-r * pCos);
+                pieceCenterZ = piece.position.z + (-r * pSin);
+            } else {
+                pieceCenterX = piece.position.x + (r * pCos);
+                pieceCenterZ = piece.position.z + (r * pSin);
+            }
+        } else {
+            pieceCenterX = piece.position.x + pSin * (pieceLength / 2);
+            pieceCenterZ = piece.position.z + pCos * (pieceLength / 2);
+        }
+
+        const pieceCorners = [
+            new THREE.Vector2(
+                pieceCenterX + (-pHalfW * pCos - (-pHalfL) * pSin),
+                pieceCenterZ + (-pHalfW * pSin + (-pHalfL) * pCos)
+            ),
+            new THREE.Vector2(
+                pieceCenterX + (pHalfW * pCos - (-pHalfL) * pSin),
+                pieceCenterZ + (pHalfW * pSin + (-pHalfL) * pCos)
+            ),
+            new THREE.Vector2(
+                pieceCenterX + (pHalfW * pCos - pHalfL * pSin),
+                pieceCenterZ + (pHalfW * pSin + pHalfL * pCos)
+            ),
+            new THREE.Vector2(
+                pieceCenterX + (-pHalfW * pCos - pHalfL * pSin),
+                pieceCenterZ + (-pHalfW * pSin + pHalfL * pCos)
+            )
+        ];
+
+        if (polygonsOverlap(obstacleCorners, pieceCorners)) {
+            onTrack = true;
+            break;
+        }
+    }
+
+    // Must be on a track piece
+    if (!onTrack) {
+        return false;
+    }
+
+    // Check against other obstacles (no overlap allowed)
+    for (const obstacle of obstacles) {
+        if (obstacle.destroyed) continue;
+
+        const oHalfSize = obstacle.size / 2;
+        const otherCorners = [
+            new THREE.Vector2(obstacle.position.x - oHalfSize, obstacle.position.z - oHalfSize),
+            new THREE.Vector2(obstacle.position.x + oHalfSize, obstacle.position.z - oHalfSize),
+            new THREE.Vector2(obstacle.position.x + oHalfSize, obstacle.position.z + oHalfSize),
+            new THREE.Vector2(obstacle.position.x - oHalfSize, obstacle.position.z + oHalfSize)
+        ];
+
+        if (polygonsOverlap(obstacleCorners, otherCorners)) {
+            return false;
+        }
+    }
+
+    return true;
 }

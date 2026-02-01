@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { PHYSICS, PIECE_DATA } from '../constants.js';
 import { addBarriersToStraight, addBarriersToCurve, addMarkingsToStraight, addMarkingsToCurve } from './barriers.js';
+import { getColor, getThemeObject, onThemeChange } from '../theme/themeManager.js';
+
+// Track all piece materials for theme updates
+const pieceMaterials = new Set();
 
 function createStraightPiece(def, isPreview = false) {
     const group = new THREE.Group();
@@ -8,10 +12,15 @@ function createStraightPiece(def, isPreview = false) {
 
     const roadGeom = new THREE.PlaneGeometry(width, def.length);
     const roadMat = new THREE.MeshStandardMaterial({
-        color: isPreview ? 0x666666 : 0x333333,
+        color: isPreview ? 0x666666 : getColor('road.color'),
+        roughness: getColor('road.roughness'),
         transparent: isPreview,
         opacity: isPreview ? 0.7 : 1
     });
+    if (!isPreview) {
+        roadMat.userData.themeKey = 'road.color';
+        pieceMaterials.add(roadMat);
+    }
     const road = new THREE.Mesh(roadGeom, roadMat);
     road.rotation.x = -Math.PI / 2;
     road.position.y = 0.15;
@@ -160,11 +169,16 @@ function createCurvePiece(def, isPreview = false) {
     roadGeom.computeVertexNormals();
 
     const roadMat = new THREE.MeshStandardMaterial({
-        color: isPreview ? 0x666666 : 0x333333,
+        color: isPreview ? 0x666666 : getColor('road.color'),
+        roughness: getColor('road.roughness'),
         transparent: isPreview,
         opacity: isPreview ? 0.7 : 1,
         side: THREE.DoubleSide
     });
+    if (!isPreview) {
+        roadMat.userData.themeKey = 'road.color';
+        pieceMaterials.add(roadMat);
+    }
     const road = new THREE.Mesh(roadGeom, roadMat);
     road.position.y = 0.15;
     road.receiveShadow = true;
@@ -277,8 +291,14 @@ function createSandPitPiece(def, isPreview = false) {
     group.add(road);
 
     if (!isPreview) {
+        const sandTheme = getThemeObject('track.sand');
         const sandGeom = new THREE.PlaneGeometry(width - 2, length - 6);
-        const sandMat = new THREE.MeshStandardMaterial({ color: 0xc2b280 });
+        const sandMat = new THREE.MeshStandardMaterial({
+            color: sandTheme.color,
+            roughness: sandTheme.roughness
+        });
+        sandMat.userData.themeKey = 'track.sand';
+        pieceMaterials.add(sandMat);
         const sand = new THREE.Mesh(sandGeom, sandMat);
         sand.rotation.x = -Math.PI / 2;
         sand.position.set(0, 0.2, length / 2);
@@ -353,12 +373,17 @@ function createIceSectionPiece(def, isPreview = false) {
 
     if (!isPreview) {
         // Ice surface with glossy appearance
+        const iceTheme = getThemeObject('track.ice');
         const iceGeom = new THREE.PlaneGeometry(width - 2, length - 6);
         const iceMat = new THREE.MeshStandardMaterial({
-            color: 0xaaddee,
+            color: iceTheme.color,
+            emissive: iceTheme.emissive || 0x000000,
+            emissiveIntensity: iceTheme.emissiveIntensity || 0,
             metalness: 0.3,
-            roughness: 0.1
+            roughness: iceTheme.roughness
         });
+        iceMat.userData.themeKey = 'track.ice';
+        pieceMaterials.add(iceMat);
         const ice = new THREE.Mesh(iceGeom, iceMat);
         ice.rotation.x = -Math.PI / 2;
         ice.position.set(0, 0.2, length / 2);
@@ -367,7 +392,7 @@ function createIceSectionPiece(def, isPreview = false) {
         // Ice cracks/texture detail
         for (let i = 0; i < 8; i++) {
             const crackGeom = new THREE.PlaneGeometry(0.1, 3 + Math.random() * 4);
-            const crackMat = new THREE.MeshBasicMaterial({ color: 0x88bbcc, transparent: true, opacity: 0.6 });
+            const crackMat = new THREE.MeshBasicMaterial({ color: iceTheme.color, transparent: true, opacity: 0.6 });
             const crack = new THREE.Mesh(crackGeom, crackMat);
             crack.rotation.x = -Math.PI / 2;
             crack.rotation.z = Math.random() * Math.PI;
@@ -490,12 +515,17 @@ function createBankedCurvePiece(def, isPreview = false) {
     roadGeom.setIndex(indices);
     roadGeom.computeVertexNormals();
 
+    const loopTheme = getThemeObject('track.loop');
     const roadMat = new THREE.MeshStandardMaterial({
-        color: isPreview ? 0x666666 : 0x444455,
+        color: isPreview ? 0x666666 : loopTheme.color,
         transparent: isPreview,
         opacity: isPreview ? 0.7 : 1,
         side: THREE.DoubleSide
     });
+    if (!isPreview) {
+        roadMat.userData.themeKey = 'track.loop';
+        pieceMaterials.add(roadMat);
+    }
     const road = new THREE.Mesh(roadGeom, roadMat);
     road.position.y = 0.15;
     road.receiveShadow = true;
@@ -537,7 +567,9 @@ function createBankedCurvePiece(def, isPreview = false) {
 
             const segmentLength = (angle * outerR) / wallSegments;
             const wallGeom = new THREE.BoxGeometry(1.2, 2.5, segmentLength);
-            const wallMat = new THREE.MeshStandardMaterial({ color: i % 2 === 0 ? 0xff0000 : 0xffffff });
+            const barrierPrimary = getColor('barriers.primary');
+            const barrierSecondary = getColor('barriers.secondary');
+            const wallMat = new THREE.MeshStandardMaterial({ color: i % 2 === 0 ? barrierPrimary : barrierSecondary });
             const wall = new THREE.Mesh(wallGeom, wallMat);
             wall.position.set(x, wallHeight + 1.4, z);
             wall.rotation.y = dir > 0 ? -a : a;
@@ -557,6 +589,139 @@ function createBankedCurvePiece(def, isPreview = false) {
             bankAngle: maxBankAngle,
             trackWidth: width,
             transitionLength: transitionLength
+        };
+    }
+
+    return group;
+}
+
+function createBoostPadPiece(def, isPreview = false) {
+    const group = new THREE.Group();
+    const width = PHYSICS.trackWidth * 2;
+    const length = def.length;
+
+    // Base road surface
+    const roadGeom = new THREE.PlaneGeometry(width, length);
+    const roadMat = new THREE.MeshStandardMaterial({
+        color: isPreview ? 0x666666 : 0x333333,
+        transparent: isPreview,
+        opacity: isPreview ? 0.7 : 1
+    });
+    const road = new THREE.Mesh(roadGeom, roadMat);
+    road.rotation.x = -Math.PI / 2;
+    road.position.y = 0.15;
+    road.position.z = length / 2;
+    road.receiveShadow = true;
+    group.add(road);
+
+    if (!isPreview) {
+        // Glowing boost surface
+        const boostTheme = getThemeObject('track.boost');
+        const boostGeom = new THREE.PlaneGeometry(width - 2, length - 2);
+        const boostMat = new THREE.MeshStandardMaterial({
+            color: boostTheme.color,
+            emissive: boostTheme.emissive || boostTheme.color,
+            emissiveIntensity: boostTheme.emissiveIntensity || 0.5,
+            metalness: 0.8,
+            roughness: boostTheme.roughness
+        });
+        boostMat.userData.themeKey = 'track.boost';
+        pieceMaterials.add(boostMat);
+        const boostSurface = new THREE.Mesh(boostGeom, boostMat);
+        boostSurface.rotation.x = -Math.PI / 2;
+        boostSurface.position.set(0, 0.2, length / 2);
+        group.add(boostSurface);
+
+        // Speed arrows on the surface
+        const arrowCanvas = document.createElement('canvas');
+        arrowCanvas.width = 128;
+        arrowCanvas.height = 256;
+        const ctx = arrowCanvas.getContext('2d');
+
+        // Transparent background
+        ctx.clearRect(0, 0, 128, 256);
+
+        // Draw multiple chevron arrows pointing forward
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        for (let i = 0; i < 3; i++) {
+            const yOffset = i * 80;
+            ctx.beginPath();
+            ctx.moveTo(64, 30 + yOffset);  // Top point
+            ctx.lineTo(110, 70 + yOffset); // Right
+            ctx.lineTo(64, 55 + yOffset);  // Inner
+            ctx.lineTo(18, 70 + yOffset);  // Left
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        const arrowTexture = new THREE.CanvasTexture(arrowCanvas);
+        arrowTexture.wrapS = THREE.RepeatWrapping;
+        arrowTexture.wrapT = THREE.RepeatWrapping;
+
+        const arrowGeom = new THREE.PlaneGeometry(width - 4, length - 3);
+        const arrowMat = new THREE.MeshBasicMaterial({
+            map: arrowTexture,
+            transparent: true,
+            depthWrite: false
+        });
+        const arrows = new THREE.Mesh(arrowGeom, arrowMat);
+        arrows.rotation.x = -Math.PI / 2;
+        arrows.position.set(0, 0.25, length / 2);
+        group.add(arrows);
+
+        // Side light strips (like runway lights)
+        [-1, 1].forEach(side => {
+            for (let z = 2; z < length - 1; z += 3) {
+                const lightGeom = new THREE.BoxGeometry(0.5, 0.3, 1.5);
+                const lightMat = new THREE.MeshStandardMaterial({
+                    color: 0xffff00,
+                    emissive: 0xffaa00,
+                    emissiveIntensity: 0.8
+                });
+                const light = new THREE.Mesh(lightGeom, lightMat);
+                light.position.set(side * (PHYSICS.trackWidth - 0.5), 0.3, z);
+                group.add(light);
+            }
+        });
+
+        // Lightning bolt signs on sides
+        [-1, 1].forEach(side => {
+            const signGeom = new THREE.PlaneGeometry(2, 2);
+            const signCanvas = document.createElement('canvas');
+            signCanvas.width = 64;
+            signCanvas.height = 64;
+            const signCtx = signCanvas.getContext('2d');
+
+            // Yellow background
+            signCtx.fillStyle = '#ffcc00';
+            signCtx.fillRect(0, 0, 64, 64);
+
+            // Lightning bolt
+            signCtx.fillStyle = '#000';
+            signCtx.beginPath();
+            signCtx.moveTo(38, 5);
+            signCtx.lineTo(20, 30);
+            signCtx.lineTo(30, 30);
+            signCtx.lineTo(26, 59);
+            signCtx.lineTo(44, 34);
+            signCtx.lineTo(34, 34);
+            signCtx.closePath();
+            signCtx.fill();
+
+            const signTex = new THREE.CanvasTexture(signCanvas);
+            const signMat = new THREE.MeshBasicMaterial({ map: signTex });
+            const sign = new THREE.Mesh(signGeom, signMat);
+            sign.position.set(side * (PHYSICS.trackWidth + 0.5), 1.5, length / 2);
+            sign.rotation.y = -side * 0.3;
+            group.add(sign);
+        });
+
+        addBarriersToStraight(group, length, width);
+
+        group.userData.obstacleZone = {
+            type: 'boost',
+            start: 1,
+            end: length - 1
         };
     }
 
@@ -629,19 +794,22 @@ function createLoopPiece(def, isPreview = false) {
         loopGeom.setIndex(loopIndices);
         loopGeom.computeVertexNormals();
 
+        const loopTheme = getThemeObject('track.loop');
         const loopMat = new THREE.MeshStandardMaterial({
-            color: 0x555566,
+            color: loopTheme.color,
             side: THREE.DoubleSide,
             metalness: 0.2,
             roughness: 0.8
         });
+        loopMat.userData.themeKey = 'track.loop';
+        pieceMaterials.add(loopMat);
         const loopMesh = new THREE.Mesh(loopGeom, loopMat);
         loopMesh.receiveShadow = true;
         loopMesh.castShadow = true;
         group.add(loopMesh);
 
         // Support structure
-        const supportMat = new THREE.MeshStandardMaterial({ color: 0x666666 });
+        const supportMat = new THREE.MeshStandardMaterial({ color: loopTheme.inside });
         [-1, 1].forEach(side => {
             const archGeom = new THREE.TorusGeometry(loopRadius + 1, 0.8, 8, 32);
             const arch = new THREE.Mesh(archGeom, supportMat);
@@ -717,6 +885,7 @@ const meshCreators = {
     'jump-ramp': createJumpRampPiece,
     'sand-pit': createSandPitPiece,
     'ice-section': createIceSectionPiece,
+    'boost-pad': createBoostPadPiece,
     'loop': createLoopPiece
 };
 
@@ -724,3 +893,27 @@ export const PIECE_DEFS = {};
 for (const [key, data] of Object.entries(PIECE_DATA)) {
     PIECE_DEFS[key] = { ...data, createMesh: meshCreators[key] };
 }
+
+// Update all tracked materials when theme changes
+function updatePieceMaterialsTheme() {
+    pieceMaterials.forEach(mat => {
+        if (mat.userData.themeKey) {
+            const themeData = getThemeObject(mat.userData.themeKey);
+            if (themeData) {
+                if (typeof themeData === 'object' && themeData.color !== undefined) {
+                    mat.color.setHex(themeData.color);
+                    if (themeData.roughness !== undefined) mat.roughness = themeData.roughness;
+                    if (themeData.emissive !== undefined) mat.emissive.setHex(themeData.emissive);
+                    if (themeData.emissiveIntensity !== undefined) mat.emissiveIntensity = themeData.emissiveIntensity;
+                } else {
+                    mat.color.setHex(themeData);
+                }
+            }
+        }
+    });
+}
+
+// Subscribe to theme changes
+onThemeChange(() => {
+    updatePieceMaterialsTheme();
+});

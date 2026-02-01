@@ -5,7 +5,9 @@ import { setupInputListeners } from './input.js';
 import { setupEventListeners } from './events.js';
 import { updatePlayerPhysics } from './car/playerPhysics.js';
 import { updateAICars } from './ai/aiCars.js';
-import { updatePoofParticles } from './effects/particles.js';
+import { updatePoofParticles, updateDriftSmoke } from './effects/particles.js';
+import { updateDecorationTriggers } from './track/decorationTriggers.js';
+import { updateObstaclePhysics } from './obstacles/obstaclePhysics.js';
 
 // Boot
 const container = document.getElementById('canvas-container');
@@ -29,6 +31,13 @@ function animate(time) {
     updatePlayerPhysics(delta);
     updateAICars(delta);
     updatePoofParticles(delta);
+    updateDriftSmoke(delta);
+    updateObstaclePhysics(delta);
+
+    // Update decoration triggers during racing
+    if (state.gameState === 'racing' || state.gameState === 'finished') {
+        updateDecorationTriggers(delta);
+    }
 
     renderer.render(scene, camera);
 }

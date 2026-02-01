@@ -3,6 +3,14 @@ import * as THREE from 'three';
 // Game flow
 export let gameState = 'idle';
 export function setGameState(s) { gameState = s; }
+export let isPaused = false;
+export function setIsPaused(v) { isPaused = v; }
+export let pauseStartTime = 0;
+export function setPauseStartTime(v) { pauseStartTime = v; }
+export let totalPausedTime = 0;
+export function setTotalPausedTime(v) { totalPausedTime = v; }
+export let isCountingDown = false;
+export function setIsCountingDown(v) { isCountingDown = v; }
 
 // Track
 export const placedPieces = [];
@@ -27,6 +35,13 @@ export let topSpeed = 0;
 export function setTopSpeed(v) { topSpeed = v; }
 export let lastCheckpoint = 0;
 export function setLastCheckpoint(v) { lastCheckpoint = v; }
+
+// Checkpoint system for proper lap counting
+// Checkpoints at 0.25, 0.5, 0.75 of track - must pass all to count a lap
+export let checkpointsPassed = [false, false, false];
+export function setCheckpointsPassed(arr) { checkpointsPassed = arr; }
+export function resetCheckpoints() { checkpointsPassed = [false, false, false]; }
+
 export let playerFinished = false;
 export function setPlayerFinished(v) { playerFinished = v; }
 
@@ -52,15 +67,23 @@ export let playerPhysics = {
     driftDirection: 0,        // -1 left, 1 right, 0 none
     // Collision state
     collisionRecovery: 0,     // Time remaining for reduced grip after collision
-    spinVelocity: 0           // Angular velocity from collision
+    spinVelocity: 0,          // Angular velocity from collision
+    // Crash state
+    isCrashed: false,
+    crashTimer: 0,
+    lastSafePosition: new THREE.Vector3(),
+    lastSafeHeading: 0,
+    lastSafeTrackT: 0,
+    offTrackTimer: 0
 };
 export function setPlayerPhysics(pp) { playerPhysics = pp; }
 
 // AI
 export const aiCars = [];
 
-// Grandstands
-export const grandstands = [];
+// Decorations
+export const placedDecorations = [];
+export const decorationElements = [];
 
 // Drag state
 export let isDragging = false;

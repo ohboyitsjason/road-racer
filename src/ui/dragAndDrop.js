@@ -1,10 +1,33 @@
 import * as THREE from 'three';
 import * as state from '../state.js';
 import { scene, controls, raycaster, mouseVec, camera } from '../scene.js';
-import { findSnapPoint, checkPlacementValid, getLocalEndpoint, getWorldPositionFromMouse, snapToGrid, placePieceAt, removeEndpointMarkers, getPieceEndpoint } from '../track/placement.js';
+import { findSnapPoint, checkPlacementValid, getLocalEndpoint, getWorldPositionFromMouse, snapToGrid, placePieceAt, removeEndpointMarkers, getPieceEndpoint, checkDecorationPlacementValid, checkObstaclePlacementValid } from '../track/placement.js';
 import { PIECE_DEFS } from '../track/pieces.js';
 import { createPoofEffect } from '../effects/particles.js';
 import { updateTrackStatus } from '../track/trackState.js';
+import { createDecoration } from '../track/decorations.js';
+import { DECORATION_DATA, PHYSICS } from '../constants.js';
+import { playThump, playDelete } from '../audio/audioManager.js';
+import { obstacles, addObstacle } from '../obstacles/obstacleState.js';
+import { createCrateMesh, createCratePreview } from '../obstacles/obstacleMeshes.js';
+import { spawnObstacle } from '../obstacles/obstaclePhysics.js';
+
+// Decoration drag state
+let isDraggingDecoration = false;
+let dragDecorationType = null;
+let decorationPreviewMesh = null;
+
+// Existing decoration drag state
+let isDraggingExistingDecoration = false;
+let draggedDecorationIndex = -1;
+
+// Obstacle drag state
+let isDraggingObstacle = false;
+let dragObstacleType = null;
+let obstaclePreviewMesh = null;
+
+// Track last mouse position for R key rotation
+let lastMousePosition = { x: 0, y: 0 };
 
 function updatePreviewPosition() {
     if (!state.previewMesh3D || !state.isDragging) return;
@@ -61,13 +84,7 @@ export function startDrag(pieceType, event) {
 
     controls.enabled = false;
 
-    const preview = document.createElement('div');
-    preview.className = 'drag-preview';
     const def = PIECE_DEFS[pieceType];
-    preview.innerHTML = pieceType.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) + '<br><small>R to rotate</small>';
-    document.body.appendChild(preview);
-    state.setDragPreview(preview);
-
     if (def) {
         const mesh = def.createMesh(def, true);
         scene.add(mesh);
@@ -81,10 +98,10 @@ export function startDrag(pieceType, event) {
 }
 
 export function updateDragPosition(event) {
-    if (!state.isDragging || !state.dragPreview) return;
+    if (!state.isDragging) return;
 
-    state.dragPreview.style.left = event.clientX + 'px';
-    state.dragPreview.style.top = event.clientY + 'px';
+    lastMousePosition.x = event.clientX;
+    lastMousePosition.y = event.clientY;
 
     const worldPos = getWorldPositionFromMouse(event.clientX, event.clientY);
     if (worldPos) {
@@ -98,7 +115,7 @@ export function endDrag(event) {
 
     const dropTarget = document.elementFromPoint(event.clientX, event.clientY);
     const isOverCanvas = dropTarget && (dropTarget.tagName === 'CANVAS' || dropTarget.id === 'canvas-container');
-    const isOverLibrary = dropTarget && dropTarget.closest('#piece-library');
+    const isOverLibrary = dropTarget && dropTarget.closest('#gallery-panel');
 
     if (isOverCanvas && !isOverLibrary && state.dragPieceType && state.currentSnapValid && state.currentSnap) {
         const finalPosition = state.currentSnap.position.clone();
@@ -115,14 +132,10 @@ export function endDrag(event) {
         placePieceAt(state.dragPieceType, finalPosition, finalHeading);
         updateTrackStatus();
         createPoofEffect(poofPosition);
+        playThump();
     }
 
     // Cleanup
-    if (state.dragPreview) {
-        document.body.removeChild(state.dragPreview);
-        state.setDragPreview(null);
-    }
-
     if (state.previewMesh3D) {
         scene.remove(state.previewMesh3D);
         state.setPreviewMesh3D(null);
@@ -152,6 +165,26 @@ export function getClickedPiece(clientX, clientY) {
     for (let i = 0; i < state.placedPieces.length; i++) {
         const piece = state.placedPieces[i];
         const intersects = raycaster.intersectObject(piece.mesh, true);
+        if (intersects.length > 0) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+// Check if click is on an existing decoration
+export function getClickedDecoration(clientX, clientY) {
+    if (state.gameState !== 'building') return -1;
+
+    mouseVec.x = (clientX / window.innerWidth) * 2 - 1;
+    mouseVec.y = -(clientY / window.innerHeight) * 2 + 1;
+
+    raycaster.setFromCamera(mouseVec, camera);
+
+    for (let i = 0; i < state.placedDecorations.length; i++) {
+        const deco = state.placedDecorations[i];
+        const intersects = raycaster.intersectObject(deco.mesh, true);
         if (intersects.length > 0) {
             return i;
         }
@@ -191,37 +224,45 @@ export function startDragExisting(pieceIndex, event) {
         state.setPreviewMesh3D(mesh);
     }
 
-    const preview = document.createElement('div');
-    preview.className = 'drag-preview';
-    preview.innerHTML = piece.type.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) + '<br><small>R to rotate | Library to remove</small>';
-    document.body.appendChild(preview);
-    preview.style.left = event.clientX + 'px';
-    preview.style.top = event.clientY + 'px';
-    state.setDragPreview(preview);
+    lastMousePosition.x = event.clientX;
+    lastMousePosition.y = event.clientY;
 
     document.getElementById('drop-indicator').style.display = 'block';
-    document.getElementById('drop-indicator').textContent = 'Drag to reposition | R to rotate | Library to remove';
+    document.getElementById('drop-indicator').textContent = 'Drag to reposition | R to rotate';
     document.getElementById('drop-indicator').style.background = 'rgba(76, 175, 80, 0.9)';
+
+    // Show delete overlay
+    const deleteOverlay = document.getElementById('delete-overlay');
+    if (deleteOverlay) deleteOverlay.classList.add('active');
 }
 
 // Update dragging existing piece
 export function updateDragExisting(event) {
     if (!state.isDraggingExisting) return;
 
-    if (state.dragPreview) {
-        state.dragPreview.style.left = event.clientX + 'px';
-        state.dragPreview.style.top = event.clientY + 'px';
-    }
+    lastMousePosition.x = event.clientX;
+    lastMousePosition.y = event.clientY;
 
     const dropTarget = document.elementFromPoint(event.clientX, event.clientY);
-    const isOverLibrary = dropTarget && dropTarget.closest('#piece-library');
+    const isOverLibrary = dropTarget && dropTarget.closest('#gallery-panel');
+
+    const deleteOverlay = document.getElementById('delete-overlay');
 
     if (isOverLibrary) {
-        document.getElementById('drop-indicator').textContent = 'Release to remove piece!';
+        document.getElementById('drop-indicator').textContent = 'Release to delete piece!';
         document.getElementById('drop-indicator').style.background = 'rgba(244, 67, 54, 0.9)';
 
         if (state.previewMesh3D) state.previewMesh3D.visible = false;
+
+        // Highlight delete overlay
+        if (deleteOverlay) {
+            deleteOverlay.style.background = 'rgba(244, 67, 54, 0.9)';
+        }
     } else {
+        // Reset delete overlay
+        if (deleteOverlay) {
+            deleteOverlay.style.background = 'rgba(0, 0, 0, 0.85)';
+        }
         const worldPos = getWorldPositionFromMouse(event.clientX, event.clientY);
         if (worldPos && state.previewMesh3D) {
             state.previewMesh3D.visible = true;
@@ -284,12 +325,13 @@ export function endDragExisting(event) {
     if (!state.isDraggingExisting) return;
 
     const dropTarget = document.elementFromPoint(event.clientX, event.clientY);
-    const isOverLibrary = dropTarget && dropTarget.closest('#piece-library');
+    const isOverLibrary = dropTarget && dropTarget.closest('#gallery-panel');
 
     if (isOverLibrary && state.draggedPieceIndex >= 0) {
         const piece = state.placedPieces[state.draggedPieceIndex];
 
         createPoofEffect(piece.position);
+        playDelete();
 
         removeEndpointMarkers(piece);
         scene.remove(piece.mesh);
@@ -334,6 +376,7 @@ export function endDragExisting(event) {
         piece.endpointMarkers = [startMarker, endMarker];
 
         createPoofEffect(state.currentSnap.position);
+        playThump();
 
         updateTrackStatus();
     } else {
@@ -345,17 +388,19 @@ export function endDragExisting(event) {
     }
 
     // Cleanup
-    if (state.dragPreview) {
-        document.body.removeChild(state.dragPreview);
-        state.setDragPreview(null);
-    }
-
     if (state.previewMesh3D) {
         scene.remove(state.previewMesh3D);
         state.setPreviewMesh3D(null);
     }
 
     document.getElementById('drop-indicator').style.display = 'none';
+
+    // Hide delete overlay
+    const deleteOverlay = document.getElementById('delete-overlay');
+    if (deleteOverlay) {
+        deleteOverlay.classList.remove('active');
+        deleteOverlay.style.background = 'rgba(0, 0, 0, 0.85)';
+    }
 
     if (state.gameState === 'building') {
         controls.enabled = true;
@@ -369,14 +414,430 @@ export function endDragExisting(event) {
     state.setCurrentSnapValid(false);
 }
 
-// Canvas mouse down handler for picking up existing pieces
+// Canvas mouse down handler for picking up existing pieces or decorations
 export function onCanvasMouseDown(event) {
     if (state.gameState !== 'building') return;
-    if (state.isDragging || state.isDraggingExisting) return;
+    if (state.isDragging || state.isDraggingExisting || isDraggingDecoration || isDraggingExistingDecoration || isDraggingObstacle) return;
 
+    // Check for track piece click first
     const pieceIndex = getClickedPiece(event.clientX, event.clientY);
     if (pieceIndex >= 0) {
         event.preventDefault();
         startDragExisting(pieceIndex, event);
+        return;
+    }
+
+    // Check for decoration click
+    const decoIndex = getClickedDecoration(event.clientX, event.clientY);
+    if (decoIndex >= 0) {
+        event.preventDefault();
+        startDragExistingDecoration(decoIndex, event);
+    }
+}
+
+// ==================== EXISTING DECORATION DRAGGING ====================
+
+export function startDragExistingDecoration(decoIndex, event) {
+    if (decoIndex < 0 || decoIndex >= state.placedDecorations.length) return;
+
+    const deco = state.placedDecorations[decoIndex];
+
+    isDraggingExistingDecoration = true;
+    draggedDecorationIndex = decoIndex;
+    dragDecorationType = deco.type;
+    state.setDragRotation(deco.heading);
+
+    controls.enabled = false;
+    deco.mesh.visible = false;
+
+    // Create preview mesh
+    decorationPreviewMesh = createDecoration(deco.type);
+    decorationPreviewMesh.position.copy(deco.position);
+    decorationPreviewMesh.rotation.y = deco.heading;
+    decorationPreviewMesh.traverse(child => {
+        if (child.isMesh && child.material) {
+            child.material = child.material.clone();
+            child.material.transparent = true;
+            child.material.opacity = 0.7;
+        }
+    });
+    scene.add(decorationPreviewMesh);
+
+    lastMousePosition.x = event.clientX;
+    lastMousePosition.y = event.clientY;
+
+    document.getElementById('drop-indicator').style.display = 'block';
+    document.getElementById('drop-indicator').textContent = 'Drag to reposition | R to rotate';
+    document.getElementById('drop-indicator').style.background = 'rgba(139, 69, 19, 0.9)';
+
+    // Show delete overlay
+    const deleteOverlay = document.getElementById('delete-overlay');
+    if (deleteOverlay) deleteOverlay.classList.add('active');
+}
+
+export function updateDragExistingDecoration(event) {
+    if (!isDraggingExistingDecoration) return;
+
+    lastMousePosition.x = event.clientX;
+    lastMousePosition.y = event.clientY;
+
+    const dropTarget = document.elementFromPoint(event.clientX, event.clientY);
+    const isOverLibrary = dropTarget && dropTarget.closest('#gallery-panel');
+
+    const deleteOverlay = document.getElementById('delete-overlay');
+
+    if (isOverLibrary) {
+        document.getElementById('drop-indicator').textContent = 'Release to delete decoration!';
+        document.getElementById('drop-indicator').style.background = 'rgba(244, 67, 54, 0.9)';
+
+        if (decorationPreviewMesh) decorationPreviewMesh.visible = false;
+
+        // Highlight delete overlay
+        if (deleteOverlay) {
+            deleteOverlay.style.background = 'rgba(244, 67, 54, 0.9)';
+        }
+    } else {
+        // Reset delete overlay
+        if (deleteOverlay) {
+            deleteOverlay.style.background = 'rgba(0, 0, 0, 0.85)';
+        }
+
+        const worldPos = getWorldPositionFromMouse(event.clientX, event.clientY);
+        if (worldPos && decorationPreviewMesh) {
+            decorationPreviewMesh.visible = true;
+            const gridPos = snapToGrid(worldPos);
+            decorationPreviewMesh.position.copy(gridPos);
+            decorationPreviewMesh.rotation.y = state.dragRotation;
+
+            // Temporarily remove decoration for overlap check
+            const tempDeco = state.placedDecorations.splice(draggedDecorationIndex, 1)[0];
+            const isValid = checkDecorationPlacementValid(gridPos, state.dragRotation, dragDecorationType);
+            state.placedDecorations.splice(draggedDecorationIndex, 0, tempDeco);
+
+            state.setCurrentSnapValid(isValid);
+            state.setCurrentSnap(isValid ? { position: gridPos.clone(), heading: state.dragRotation, valid: true } : null);
+
+            decorationPreviewMesh.traverse(child => {
+                if (child.isMesh && child.material) {
+                    child.material.opacity = isValid ? 0.7 : 0.5;
+                }
+            });
+
+            if (isValid) {
+                document.getElementById('drop-indicator').textContent = 'Drop to place | R to rotate';
+                document.getElementById('drop-indicator').style.background = 'rgba(139, 69, 19, 0.9)';
+            } else {
+                document.getElementById('drop-indicator').textContent = 'Invalid - overlaps with track or decoration';
+                document.getElementById('drop-indicator').style.background = 'rgba(244, 67, 54, 0.9)';
+            }
+        }
+    }
+}
+
+export function endDragExistingDecoration(event) {
+    if (!isDraggingExistingDecoration) return;
+
+    const dropTarget = document.elementFromPoint(event.clientX, event.clientY);
+    const isOverLibrary = dropTarget && dropTarget.closest('#gallery-panel');
+
+    if (isOverLibrary && draggedDecorationIndex >= 0) {
+        // Remove the decoration
+        const deco = state.placedDecorations[draggedDecorationIndex];
+        createPoofEffect(deco.position);
+        playDelete();
+        scene.remove(deco.mesh);
+        state.decorationElements.splice(state.decorationElements.indexOf(deco.mesh), 1);
+        state.placedDecorations.splice(draggedDecorationIndex, 1);
+    } else if (state.currentSnapValid && state.currentSnap && draggedDecorationIndex >= 0) {
+        // Reposition the decoration
+        const deco = state.placedDecorations[draggedDecorationIndex];
+        deco.position.copy(state.currentSnap.position);
+        deco.heading = state.currentSnap.heading;
+        deco.mesh.position.copy(state.currentSnap.position);
+        deco.mesh.rotation.y = state.currentSnap.heading;
+        deco.mesh.visible = true;
+        createPoofEffect(state.currentSnap.position);
+        playThump();
+    } else {
+        // Invalid drop - restore original position
+        if (draggedDecorationIndex >= 0 && draggedDecorationIndex < state.placedDecorations.length) {
+            state.placedDecorations[draggedDecorationIndex].mesh.visible = true;
+        }
+    }
+
+    // Cleanup
+    if (decorationPreviewMesh) {
+        scene.remove(decorationPreviewMesh);
+        decorationPreviewMesh = null;
+    }
+
+    document.getElementById('drop-indicator').style.display = 'none';
+
+    // Hide delete overlay
+    const deleteOverlay = document.getElementById('delete-overlay');
+    if (deleteOverlay) {
+        deleteOverlay.classList.remove('active');
+        deleteOverlay.style.background = 'rgba(0, 0, 0, 0.85)';
+    }
+
+    if (state.gameState === 'building') {
+        controls.enabled = true;
+    }
+
+    isDraggingExistingDecoration = false;
+    draggedDecorationIndex = -1;
+    dragDecorationType = null;
+    state.setCurrentSnap(null);
+    state.setCurrentSnapValid(false);
+}
+
+export function isDraggingExistingDecorationActive() {
+    return isDraggingExistingDecoration;
+}
+
+// ==================== NEW DECORATION DRAGGING ====================
+
+export function startDragDecoration(decorationType, event) {
+    if (state.gameState !== 'building') return;
+
+    isDraggingDecoration = true;
+    dragDecorationType = decorationType;
+    state.setDragRotation(0);
+
+    controls.enabled = false;
+
+    // Create 3D preview mesh
+    decorationPreviewMesh = createDecoration(decorationType);
+    decorationPreviewMesh.traverse(child => {
+        if (child.isMesh && child.material) {
+            child.material = child.material.clone();
+            child.material.transparent = true;
+            child.material.opacity = 0.7;
+        }
+    });
+    scene.add(decorationPreviewMesh);
+
+    document.getElementById('drop-indicator').style.display = 'block';
+    document.getElementById('drop-indicator').textContent = 'Drop to place decoration! Press R to rotate';
+    document.getElementById('drop-indicator').style.background = 'rgba(139, 69, 19, 0.9)';
+
+    updateDragDecoration(event);
+}
+
+export function updateDragDecoration(event) {
+    if (!isDraggingDecoration) return;
+
+    lastMousePosition.x = event.clientX;
+    lastMousePosition.y = event.clientY;
+
+    const worldPos = getWorldPositionFromMouse(event.clientX, event.clientY);
+    if (worldPos && decorationPreviewMesh) {
+        const gridPos = snapToGrid(worldPos);
+        decorationPreviewMesh.position.copy(gridPos);
+        decorationPreviewMesh.rotation.y = state.dragRotation;
+
+        // Check if placement is valid (no overlap with track)
+        const isValid = checkDecorationPlacementValid(gridPos, state.dragRotation, dragDecorationType);
+
+        decorationPreviewMesh.traverse(child => {
+            if (child.isMesh && child.material) {
+                if (isValid) {
+                    child.material.opacity = 0.7;
+                    if (child.material.emissive) child.material.emissive.setHex(0x003300);
+                } else {
+                    child.material.opacity = 0.5;
+                    if (child.material.emissive) child.material.emissive.setHex(0x330000);
+                }
+            }
+        });
+
+        state.setCurrentSnapValid(isValid);
+        state.setCurrentSnap(isValid ? { position: gridPos.clone(), heading: state.dragRotation, valid: true } : null);
+
+        if (isValid) {
+            document.getElementById('drop-indicator').textContent = 'Drop to place decoration! Press R to rotate';
+            document.getElementById('drop-indicator').style.background = 'rgba(139, 69, 19, 0.9)';
+        } else {
+            document.getElementById('drop-indicator').textContent = 'Invalid - overlaps with track piece';
+            document.getElementById('drop-indicator').style.background = 'rgba(244, 67, 54, 0.9)';
+        }
+    }
+}
+
+export function endDragDecoration(event) {
+    if (!isDraggingDecoration) return;
+
+    const dropTarget = document.elementFromPoint(event.clientX, event.clientY);
+    const isOverCanvas = dropTarget && (dropTarget.tagName === 'CANVAS' || dropTarget.id === 'canvas-container');
+    const isOverLibrary = dropTarget && dropTarget.closest('#gallery-panel');
+
+    if (isOverCanvas && !isOverLibrary && state.currentSnapValid && state.currentSnap) {
+        const finalPosition = state.currentSnap.position.clone();
+        const finalHeading = state.currentSnap.heading;
+
+        // Create the actual decoration
+        const decoration = createDecoration(dragDecorationType);
+        decoration.position.copy(finalPosition);
+        decoration.rotation.y = finalHeading;
+        scene.add(decoration);
+
+        // Store decoration data
+        state.placedDecorations.push({
+            type: dragDecorationType,
+            position: finalPosition.clone(),
+            heading: finalHeading,
+            mesh: decoration
+        });
+        state.decorationElements.push(decoration);
+
+        createPoofEffect(finalPosition);
+        playThump();
+    }
+
+    // Cleanup
+    if (decorationPreviewMesh) {
+        scene.remove(decorationPreviewMesh);
+        decorationPreviewMesh = null;
+    }
+
+    document.getElementById('drop-indicator').style.display = 'none';
+
+    if (state.gameState === 'building') {
+        controls.enabled = true;
+    }
+
+    isDraggingDecoration = false;
+    dragDecorationType = null;
+    state.setCurrentSnap(null);
+    state.setCurrentSnapValid(false);
+}
+
+export function isDraggingDecorationActive() {
+    return isDraggingDecoration;
+}
+
+export function rotateDecorationPreview() {
+    if ((isDraggingDecoration || isDraggingExistingDecoration) && decorationPreviewMesh) {
+        state.setDragRotation(state.dragRotation + Math.PI / 4);
+        if (state.dragRotation >= Math.PI * 2) state.setDragRotation(state.dragRotation - Math.PI * 2);
+        decorationPreviewMesh.rotation.y = state.dragRotation;
+    }
+}
+
+export function getLastMousePosition() {
+    return { clientX: lastMousePosition.x, clientY: lastMousePosition.y };
+}
+
+// === OBSTACLE DRAG AND DROP ===
+
+export function startDragObstacle(obstacleType, event) {
+    if (state.gameState !== 'building') return;
+
+    isDraggingObstacle = true;
+    dragObstacleType = obstacleType;
+    state.setDragRotation(0);
+
+    controls.enabled = false;
+
+    // Create preview mesh
+    obstaclePreviewMesh = createCratePreview();
+    scene.add(obstaclePreviewMesh);
+
+    document.getElementById('drop-indicator').style.display = 'block';
+    document.getElementById('drop-indicator').textContent = 'Drop to place obstacle! Press R to rotate';
+    document.getElementById('drop-indicator').style.background = 'rgba(139, 90, 43, 0.9)';
+
+    updateDragObstacle(event);
+}
+
+export function updateDragObstacle(event) {
+    if (!isDraggingObstacle) return;
+
+    lastMousePosition.x = event.clientX;
+    lastMousePosition.y = event.clientY;
+
+    const worldPos = getWorldPositionFromMouse(event.clientX, event.clientY);
+    if (!worldPos) return;
+
+    // Place on ground
+    worldPos.y = PHYSICS.obstacle.crateSize / 2 + 0.1;
+
+    if (obstaclePreviewMesh) {
+        obstaclePreviewMesh.position.copy(worldPos);
+        obstaclePreviewMesh.rotation.y = state.dragRotation;
+
+        // Check if placement is valid (must be on track)
+        const isValid = checkObstaclePlacementValid(worldPos);
+        state.setCurrentSnapValid(isValid);
+
+        // Update preview color based on validity
+        obstaclePreviewMesh.material.color.setHex(isValid ? 0x8B4513 : 0xaa4444);
+        obstaclePreviewMesh.material.opacity = isValid ? 0.6 : 0.4;
+
+        if (isValid) {
+            document.getElementById('drop-indicator').textContent = 'Drop to place obstacle! Press R to rotate';
+            document.getElementById('drop-indicator').style.background = 'rgba(139, 90, 43, 0.9)';
+        } else {
+            document.getElementById('drop-indicator').textContent = 'Must place on track!';
+            document.getElementById('drop-indicator').style.background = 'rgba(244, 67, 54, 0.9)';
+        }
+    }
+}
+
+export function endDragObstacle(event) {
+    if (!isDraggingObstacle) return;
+
+    const dropTarget = document.elementFromPoint(event.clientX, event.clientY);
+    const isOverLibrary = dropTarget && dropTarget.closest('#gallery-panel');
+    const worldPos = getWorldPositionFromMouse(event.clientX, event.clientY);
+
+    if (worldPos && !isOverLibrary && state.currentSnapValid) {
+        // Place the obstacle
+        const finalPosition = worldPos.clone();
+        finalPosition.y = PHYSICS.obstacle.crateSize / 2 + 0.1;
+
+        // Create obstacle data
+        const obstacleData = spawnObstacle(dragObstacleType, finalPosition, state.dragRotation);
+
+        // Create and add mesh
+        const mesh = createCrateMesh();
+        mesh.position.copy(finalPosition);
+        mesh.rotation.y = state.dragRotation;
+        scene.add(mesh);
+        obstacleData.mesh = mesh;
+
+        // Add to obstacles array
+        addObstacle(obstacleData);
+
+        createPoofEffect(finalPosition);
+        playThump();
+    }
+
+    // Cleanup
+    if (obstaclePreviewMesh) {
+        scene.remove(obstaclePreviewMesh);
+        obstaclePreviewMesh = null;
+    }
+
+    document.getElementById('drop-indicator').style.display = 'none';
+
+    if (state.gameState === 'building') {
+        controls.enabled = true;
+    }
+
+    isDraggingObstacle = false;
+    dragObstacleType = null;
+    state.setCurrentSnapValid(false);
+}
+
+export function isDraggingObstacleActive() {
+    return isDraggingObstacle;
+}
+
+export function rotateObstaclePreview() {
+    if (isDraggingObstacle && obstaclePreviewMesh) {
+        state.setDragRotation(state.dragRotation + Math.PI / 4);
+        if (state.dragRotation >= Math.PI * 2) state.setDragRotation(state.dragRotation - Math.PI * 2);
+        obstaclePreviewMesh.rotation.y = state.dragRotation;
     }
 }

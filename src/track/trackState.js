@@ -3,7 +3,7 @@ import * as state from '../state.js';
 import { scene } from '../scene.js';
 import { getPieceEndpoint, getPieceEndpoints, removeEndpointMarkers } from './placement.js';
 import { PIECE_DEFS } from './pieces.js';
-import { PHYSICS } from '../constants.js';
+import { PHYSICS, ELEVATION } from '../constants.js';
 import { poofParticles } from '../effects/particles.js';
 
 // Build a connection map that tracks which endpoint connects to which
@@ -92,6 +92,7 @@ export function checkTrackClosed() {
 // Update track status display
 export function updateTrackStatus() {
     state.setTrackClosed(checkTrackClosed());
+    updateRampConnections();
 
     // Show/hide race button based on track validity
     const raceBtn = document.getElementById('race-btn');
@@ -100,18 +101,114 @@ export function updateTrackStatus() {
     raceBtn.disabled = !isTrackReady;
 }
 
+// Determine ramp variant based on adjacent pieces and rebuild mesh if changed
+function updateRampConnections() {
+    const connections = buildConnectionMap();
+
+    for (let i = 0; i < state.placedPieces.length; i++) {
+        const piece = state.placedPieces[i];
+        if (!piece.def.isRamp) continue;
+
+        const conn = connections[i];
+
+        // Check if start connects to another ramp
+        const startRamp = conn.startConnectedTo &&
+            state.placedPieces[conn.startConnectedTo.index].def.isRamp;
+        // Check if end connects to another ramp
+        const endRamp = conn.endConnectedTo &&
+            state.placedPieces[conn.endConnectedTo.index].def.isRamp;
+
+        let variant;
+        if (startRamp && endRamp) {
+            variant = 'connected';        // middle
+        } else if (startRamp) {
+            variant = 'connected-top';    // last (top/high end)
+        } else if (endRamp) {
+            variant = 'connected-bottom'; // first (bottom/low end)
+        } else {
+            variant = 'single';
+        }
+
+        // Only rebuild if variant changed
+        if (piece.rampVariant !== variant) {
+            piece.rampVariant = variant;
+            rebuildRampMesh(piece, i);
+        }
+    }
+}
+
+// Rebuild a ramp piece mesh with the correct variant model
+function rebuildRampMesh(piece, pieceIndex) {
+    const oldMesh = piece.mesh;
+    if (oldMesh) {
+        scene.remove(oldMesh);
+    }
+
+    const def = piece.def;
+    const newMesh = def.createMesh(def, false, piece.colorIndex, piece.rampVariant);
+    newMesh.position.copy(piece.position);
+    newMesh.rotation.y = piece.heading;
+    scene.add(newMesh);
+
+    // Update references
+    piece.mesh = newMesh;
+    const trackIdx = state.trackElements.indexOf(oldMesh);
+    if (trackIdx >= 0) {
+        state.trackElements[trackIdx] = newMesh;
+    }
+}
+
 // Generate curve points for a single piece (start to end order)
 function generatePiecePoints(piece, resolution) {
     const def = piece.def;
     const piecePoints = [];
+    const baseY = (piece.elevation || 0) * ELEVATION.HEIGHT_PER_LEVEL;
+    const elevDelta = (def.elevationDelta || 0) * ELEVATION.HEIGHT_PER_LEVEL;
 
-    if (def.curveAngle > 0) {
+    if (def.obstacleType === 'loop') {
+        // Loop piece: path goes flat → around vertical circle → flat
+        const R = def.loopRadius || PHYSICS.loopRadius;
+        const length = def.length;
+        const loopBottomZ = length / 2;
+        const loopCenterY = R + 0.5;
+        const loopRes = resolution * 3; // More points for the circle
+
+        for (let i = 0; i <= loopRes; i++) {
+            const t = i / loopRes;
+            const pieceZ = t * length; // Linear Z through the piece
+            let localY, localZ;
+
+            if (pieceZ < loopBottomZ - 0.5) {
+                // Entry flat section
+                localY = baseY + 0.1;
+                localZ = pieceZ;
+            } else if (pieceZ > loopBottomZ + 0.5) {
+                // Exit flat section
+                localY = baseY + 0.1;
+                localZ = pieceZ;
+            } else {
+                // At the loop bottom - just use the flat position
+                localY = baseY + 0.1;
+                localZ = pieceZ;
+            }
+
+            const xzPoint = new THREE.Vector3(0, 0, localZ);
+            xzPoint.applyAxisAngle(new THREE.Vector3(0, 1, 0), piece.heading);
+            xzPoint.add(new THREE.Vector3(piece.position.x, 0, piece.position.z));
+            piecePoints.push(new THREE.Vector3(xzPoint.x, localY, xzPoint.z));
+        }
+
+        // Now insert the actual loop circle points at the midpoint
+        // The road curve for AI/racing follows the flat path (entry→exit)
+        // The loop physics are handled by the surface raycaster on the mesh
+    } else if (def.curveAngle > 0) {
         const radius = def.curveRadius;
         const angle = def.curveAngle;
         const dir = def.direction;
 
         for (let i = 0; i <= resolution; i++) {
-            const a = (i / resolution) * angle;
+            const t = i / resolution;
+            const a = t * angle;
             let localX, localZ;
 
             if (dir > 0) {
@@ -122,18 +219,21 @@ function generatePiecePoints(piece, resolution) {
                 localZ = radius * Math.sin(a);
             }
 
-            const point = new THREE.Vector3(localX, 0.1, localZ);
-            point.applyAxisAngle(new THREE.Vector3(0, 1, 0), piece.heading);
-            point.add(piece.position);
-            piecePoints.push(point);
+            const localY = baseY + t * elevDelta + 0.1;
+            const xzPoint = new THREE.Vector3(localX, 0, localZ);
+            xzPoint.applyAxisAngle(new THREE.Vector3(0, 1, 0), piece.heading);
+            xzPoint.add(new THREE.Vector3(piece.position.x, 0, piece.position.z));
+            piecePoints.push(new THREE.Vector3(xzPoint.x, localY, xzPoint.z));
         }
     } else {
         for (let i = 0; i <= resolution; i++) {
-            const localZ = (i / resolution) * def.length;
-            const point = new THREE.Vector3(0, 0.1, localZ);
-            point.applyAxisAngle(new THREE.Vector3(0, 1, 0), piece.heading);
-            point.add(piece.position);
-            piecePoints.push(point);
+            const t = i / resolution;
+            const localZ = t * def.length;
+            const localY = baseY + t * elevDelta + 0.1;
+            const xzPoint = new THREE.Vector3(0, 0, localZ);
+            xzPoint.applyAxisAngle(new THREE.Vector3(0, 1, 0), piece.heading);
+            xzPoint.add(new THREE.Vector3(piece.position.x, 0, piece.position.z));
+            piecePoints.push(new THREE.Vector3(xzPoint.x, localY, xzPoint.z));
         }
     }
 

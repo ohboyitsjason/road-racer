@@ -18,7 +18,9 @@ const PIECE_CATEGORIES = {
         { type: 'sand-pit', label: 'Sand', image: null, emoji: '🏜️' },
         { type: 'ice-section', label: 'Ice', image: 'ice.png', emoji: '❄️' },
         { type: 'boost-pad', label: 'Boost', image: null, emoji: '⚡' },
-        { type: 'loop', label: 'Loop', image: 'loop.png', emoji: '🔄' }
+        { type: 'loop', label: 'Loop', image: 'loop.png', emoji: '🔄' },
+        { type: 'ramp', label: 'Ramp', image: null, emoji: '⬆' },
+        { type: 'ramp-steep', label: 'Steep Ramp', image: null, emoji: '⏫' }
     ],
     obstacles: [
         { type: 'crate', label: 'Crate', image: null, emoji: '📦', isObstacle: true }

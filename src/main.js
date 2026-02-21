@@ -1,5 +1,5 @@
 import * as state from './state.js';
-import { init as initScene, scene, camera, renderer, controls } from './scene.js';
+import { init as initScene, scene, camera, renderer, controls, initCustomGrid, composer, setDOFEnabled, updateGodraysLightPosition } from './scene.js';
 import { initEnvironment } from './effects/environment.js';
 import { setupInputListeners } from './input.js';
 import { setupEventListeners } from './events.js';
@@ -8,10 +8,13 @@ import { updateAICars } from './ai/aiCars.js';
 import { updatePoofParticles, updateDriftSmoke } from './effects/particles.js';
 import { updateDecorationTriggers } from './track/decorationTriggers.js';
 import { updateObstaclePhysics } from './obstacles/obstaclePhysics.js';
+import { clampBuildCamera } from './ui/camera.js';
+
 
 // Boot
 const container = document.getElementById('canvas-container');
 initScene(container);
+initCustomGrid();
 initEnvironment();
 setupInputListeners();
 setupEventListeners();
@@ -26,6 +29,7 @@ function animate(time) {
 
     if (state.gameState === 'idle' || state.gameState === 'building') {
         controls.update();
+        clampBuildCamera();
     }
 
     updatePlayerPhysics(delta);
@@ -39,7 +43,8 @@ function animate(time) {
         updateDecorationTriggers(delta);
     }
 
-    renderer.render(scene, camera);
+    updateGodraysLightPosition();
+    composer.render();
 }
 
 animate(0);

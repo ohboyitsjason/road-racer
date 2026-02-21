@@ -869,15 +869,44 @@ export function updatePlayerPhysics(delta) {
 }
 
 function updatePlayerCamera() {
+    const heading = state.playerPhysics.heading;
+    const pos = state.playerPhysics.position;
+    let dist, height, lookHeight, lerpSpeed;
+
+    switch (state.cameraMode) {
+        case 'far':
+            dist = 30;
+            height = 15;
+            lookHeight = 1;
+            lerpSpeed = 0.06;
+            break;
+        case 'first-person':
+            dist = -1;
+            height = 2.5;
+            lookHeight = 2;
+            lerpSpeed = 0.25;
+            break;
+        case 'near':
+        default:
+            dist = 15;
+            height = 8;
+            lookHeight = 1;
+            lerpSpeed = 0.08;
+            break;
+    }
+
     const cameraOffset = new THREE.Vector3(
-        -Math.sin(state.playerPhysics.heading) * 15,
-        8,
-        -Math.cos(state.playerPhysics.heading) * 15
+        -Math.sin(heading) * dist,
+        height,
+        -Math.cos(heading) * dist
     );
-    camera.position.lerp(state.playerPhysics.position.clone().add(cameraOffset), 0.08);
+    camera.position.lerp(pos.clone().add(cameraOffset), lerpSpeed);
+
+    // First person looks further ahead
+    const lookAhead = state.cameraMode === 'first-person' ? 10 : 0;
     camera.lookAt(
-        state.playerPhysics.position.x,
-        state.playerPhysics.position.y + 1,
-        state.playerPhysics.position.z
+        pos.x + Math.sin(heading) * lookAhead,
+        pos.y + lookHeight,
+        pos.z + Math.cos(heading) * lookAhead
     );
 }

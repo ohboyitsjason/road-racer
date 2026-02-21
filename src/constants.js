@@ -41,8 +41,8 @@ export const PHYSICS = {
     gravity: 9.8,                  // m/s^2
     rampLaunchSpeed: 10,
     rampHeight: 2.5,
-    loopRadius: 12,
-    loopMinSpeed: 18,
+    loopRadius: 25,
+    loopMinSpeed: 20,
 
     // Drift physics - Mario Kart style
     driftSlipThreshold: 0.1,       // Easy to trigger
@@ -204,6 +204,14 @@ export const DECORATION_DATA = {
     'tire-stack': { width: 5, depth: 5, hasTrigger: false }
 };
 
+// Elevation system - RollerCoaster Tycoon-style discrete levels
+export const ELEVATION = {
+    MIN_LEVEL: 0,
+    MAX_LEVEL: 4,
+    HEIGHT_PER_LEVEL: 6,   // Y units per elevation level
+    LEVELS: 5              // Total levels (0-4)
+};
+
 // Grid unit = 5, base piece = 4 grid squares = 20 units
 // Curve radius = straight length so loops close on the grid
 export const PIECE_DATA = {
@@ -219,5 +227,7 @@ export const PIECE_DATA = {
     'sand-pit':       { length: 40, curveAngle: 0, curveRadius: 0, isObstacle: true, obstacleType: 'sand' },
     'ice-section':    { length: 40, curveAngle: 0, curveRadius: 0, isObstacle: true, obstacleType: 'ice' },
     'boost-pad':      { length: 20, curveAngle: 0, curveRadius: 0, isObstacle: true, obstacleType: 'boost' },
-    'loop':           { length: 60, curveAngle: 0, curveRadius: 0, isObstacle: true, obstacleType: 'loop', loopRadius: 12 }
+    'loop':           { length: 80, curveAngle: 0, curveRadius: 0, isObstacle: true, obstacleType: 'loop', loopRadius: 25 },
+    'ramp':           { length: 40, curveAngle: 0, curveRadius: 0, isRamp: true, elevationDelta: 1 },
+    'ramp-steep':     { length: 20, curveAngle: 0, curveRadius: 0, isRamp: true, elevationDelta: 1 }
 };

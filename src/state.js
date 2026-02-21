@@ -110,5 +110,19 @@ export function setCurrentSnap(v) { currentSnap = v; }
 export let currentSnapValid = false;
 export function setCurrentSnapValid(v) { currentSnapValid = v; }
 
+// Elevation for free placement (not snapped)
+export let dragElevation = 0;
+export function setDragElevation(v) { dragElevation = v; }
+
+// Camera mode (race)
+export const CAMERA_MODES = ['near', 'far', 'first-person'];
+export let cameraMode = 'near';
+export function setCameraMode(v) { cameraMode = v; }
+export function cycleCameraMode() {
+    const idx = CAMERA_MODES.indexOf(cameraMode);
+    cameraMode = CAMERA_MODES[(idx + 1) % CAMERA_MODES.length];
+    return cameraMode;
+}
+
 // Input
 export const keys = {};

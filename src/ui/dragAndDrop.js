@@ -6,11 +6,12 @@ import { PIECE_DEFS } from '../track/pieces.js';
 import { createPoofEffect } from '../effects/particles.js';
 import { updateTrackStatus } from '../track/trackState.js';
 import { createDecoration } from '../track/decorations.js';
-import { DECORATION_DATA, PHYSICS } from '../constants.js';
+import { DECORATION_DATA, PHYSICS, PIECE_DATA, ELEVATION } from '../constants.js';
 import { playThump, playDelete } from '../audio/audioManager.js';
 import { obstacles, addObstacle } from '../obstacles/obstacleState.js';
 import { createCrateMesh, createCratePreview } from '../obstacles/obstacleMeshes.js';
 import { spawnObstacle } from '../obstacles/obstaclePhysics.js';
+import { highlightArea, clearHighlights, hasCustomGrid } from './customGrid.js';
 
 // Decoration drag state
 let isDraggingDecoration = false;
@@ -34,9 +35,15 @@ function updatePreviewPosition() {
 
     state.setCurrentSnap(findSnapPoint(state.dragWorldPosition, state.dragRotation));
 
+    // Get piece dimensions for grid highlighting
+    const pieceData = PIECE_DATA[state.dragPieceType];
+    const pieceLength = pieceData?.length || 40;
+    const pieceWidth = PHYSICS.trackWidth * 2; // Standard track width
+
     if (state.currentSnap && state.currentSnap.valid) {
+        const snapElevY = (state.currentSnap.elevation || 0) * ELEVATION.HEIGHT_PER_LEVEL;
         state.previewMesh3D.position.copy(state.currentSnap.position);
-        state.previewMesh3D.position.y = 0.3;
+        state.previewMesh3D.position.y = snapElevY + 0.3;
         state.previewMesh3D.rotation.y = state.currentSnap.heading;
         state.setCurrentSnapValid(true);
 
@@ -46,17 +53,30 @@ function updatePreviewPosition() {
             }
         });
 
-        document.getElementById('drop-indicator').textContent = 'Drop to connect piece!';
+        // Highlight grid cells for valid snap
+        if (hasCustomGrid()) {
+            highlightArea(
+                state.currentSnap.position.x,
+                state.currentSnap.position.z + pieceLength / 2,
+                pieceWidth,
+                pieceLength,
+                state.currentSnap.heading
+            );
+        }
+
+        const elevLabel = (state.currentSnap.elevation || 0) > 0 ? ` (Level ${state.currentSnap.elevation})` : '';
+        document.getElementById('drop-indicator').textContent = 'Drop to connect piece!' + elevLabel;
         document.getElementById('drop-indicator').style.background = 'rgba(76, 175, 80, 0.9)';
     } else {
         const gridPos = snapToGrid(state.dragWorldPosition);
+        const freeElevY = state.dragElevation * ELEVATION.HEIGHT_PER_LEVEL;
         state.previewMesh3D.position.copy(gridPos);
-        state.previewMesh3D.position.y = 0.3;
+        state.previewMesh3D.position.y = freeElevY + 0.3;
         state.previewMesh3D.rotation.y = state.dragRotation;
 
-        const freeValid = checkPlacementValid(gridPos, state.dragRotation, state.dragPieceType);
+        const freeValid = checkPlacementValid(gridPos, state.dragRotation, state.dragPieceType, null, state.dragElevation);
         state.setCurrentSnapValid(freeValid);
-        state.setCurrentSnap(freeValid ? { position: gridPos.clone(), heading: state.dragRotation, valid: true } : null);
+        state.setCurrentSnap(freeValid ? { position: gridPos.clone(), heading: state.dragRotation, valid: true, elevation: state.dragElevation } : null);
 
         state.previewMesh3D.traverse(child => {
             if (child.isMesh && child.material) {
@@ -64,8 +84,22 @@ function updatePreviewPosition() {
             }
         });
 
+        // Highlight grid cells for free placement
+        if (hasCustomGrid() && freeValid) {
+            highlightArea(
+                gridPos.x,
+                gridPos.z + pieceLength / 2,
+                pieceWidth,
+                pieceLength,
+                state.dragRotation
+            );
+        } else if (hasCustomGrid()) {
+            clearHighlights();
+        }
+
         if (freeValid) {
-            document.getElementById('drop-indicator').textContent = 'Drop to place piece! Press R to rotate';
+            const elevLabel = state.dragElevation > 0 ? ` (Level ${state.dragElevation})` : '';
+            document.getElementById('drop-indicator').textContent = 'Drop to place piece! R=rotate Q/E=elevation' + elevLabel;
             document.getElementById('drop-indicator').style.background = 'rgba(76, 175, 80, 0.9)';
         } else {
             document.getElementById('drop-indicator').textContent = 'Invalid position - overlaps existing piece';
@@ -81,12 +115,21 @@ export function startDrag(pieceType, event) {
     state.setIsDragging(true);
     state.setDragPieceType(pieceType);
     state.setDragRotation(0);
+    state.setDragElevation(0);
 
     controls.enabled = false;
 
     const def = PIECE_DEFS[pieceType];
     if (def) {
-        const mesh = def.createMesh(def, true);
+        const previewColorIndex = state.placedPieces.length % 3;
+        const mesh = def.createMesh(def, false, previewColorIndex);
+        mesh.traverse(child => {
+            if (child.isMesh && child.material) {
+                child.material = child.material.clone();
+                child.material.transparent = true;
+                child.material.opacity = 0.7;
+            }
+        });
         scene.add(mesh);
         state.setPreviewMesh3D(mesh);
     }
@@ -120,6 +163,7 @@ export function endDrag(event) {
     if (isOverCanvas && !isOverLibrary && state.dragPieceType && state.currentSnapValid && state.currentSnap) {
         const finalPosition = state.currentSnap.position.clone();
         const finalHeading = state.currentSnap.heading;
+        const finalElevation = state.currentSnap.elevation || 0;
 
         let poofPosition = finalPosition.clone();
         if (state.currentSnap.type === 'our-end-to-their-start' || state.currentSnap.type === 'our-end-to-their-end') {
@@ -129,7 +173,7 @@ export function endDrag(event) {
             poofPosition = finalPosition.clone().add(rotatedEnd);
         }
 
-        placePieceAt(state.dragPieceType, finalPosition, finalHeading);
+        placePieceAt(state.dragPieceType, finalPosition, finalHeading, finalElevation);
         updateTrackStatus();
         createPoofEffect(poofPosition);
         playThump();
@@ -139,6 +183,11 @@ export function endDrag(event) {
     if (state.previewMesh3D) {
         scene.remove(state.previewMesh3D);
         state.setPreviewMesh3D(null);
+    }
+
+    // Clear grid highlights
+    if (hasCustomGrid()) {
+        clearHighlights();
     }
 
     document.getElementById('drop-indicator').style.display = 'none';
@@ -204,8 +253,10 @@ export function startDragExisting(pieceIndex, event) {
     state.setDraggedPieceOriginal({
         type: piece.type,
         position: piece.position.clone(),
-        heading: piece.heading
+        heading: piece.heading,
+        elevation: piece.elevation || 0
     });
+    state.setDragElevation(piece.elevation || 0);
 
     state.setDragPieceType(piece.type);
     state.setDragRotation(piece.heading);
@@ -216,7 +267,15 @@ export function startDragExisting(pieceIndex, event) {
 
     const def = PIECE_DEFS[piece.type];
     if (def) {
-        const mesh = def.createMesh(def, true);
+        const moveColorIndex = piece.colorIndex || 0;
+        const mesh = def.createMesh(def, false, moveColorIndex);
+        mesh.traverse(child => {
+            if (child.isMesh && child.material) {
+                child.material = child.material.clone();
+                child.material.transparent = true;
+                child.material.opacity = 0.7;
+            }
+        });
         mesh.position.copy(piece.position);
         mesh.position.y = 0.3;
         mesh.rotation.y = piece.heading;
@@ -277,8 +336,9 @@ export function updateDragExisting(event) {
             state.placedPieces.splice(state.draggedPieceIndex, 0, tempPiece);
 
             if (state.currentSnap && state.currentSnap.valid) {
+                const snapElevY = (state.currentSnap.elevation || 0) * ELEVATION.HEIGHT_PER_LEVEL;
                 state.previewMesh3D.position.copy(state.currentSnap.position);
-                state.previewMesh3D.position.y = 0.3;
+                state.previewMesh3D.position.y = snapElevY + 0.3;
                 state.previewMesh3D.rotation.y = state.currentSnap.heading;
                 state.setCurrentSnapValid(true);
 
@@ -292,17 +352,18 @@ export function updateDragExisting(event) {
                 document.getElementById('drop-indicator').style.background = 'rgba(76, 175, 80, 0.9)';
             } else {
                 const gridPos = snapToGrid(state.dragWorldPosition);
+                const freeElevY = state.dragElevation * ELEVATION.HEIGHT_PER_LEVEL;
                 state.previewMesh3D.position.copy(gridPos);
-                state.previewMesh3D.position.y = 0.3;
+                state.previewMesh3D.position.y = freeElevY + 0.3;
                 state.previewMesh3D.rotation.y = state.dragRotation;
 
                 // Temporarily remove piece for overlap check
                 const tempPiece2 = state.placedPieces.splice(state.draggedPieceIndex, 1)[0];
-                const freeValid = checkPlacementValid(gridPos, state.dragRotation, state.dragPieceType);
+                const freeValid = checkPlacementValid(gridPos, state.dragRotation, state.dragPieceType, null, state.dragElevation);
                 state.placedPieces.splice(state.draggedPieceIndex, 0, tempPiece2);
 
                 state.setCurrentSnapValid(freeValid);
-                state.setCurrentSnap(freeValid ? { position: gridPos.clone(), heading: state.dragRotation, valid: true } : null);
+                state.setCurrentSnap(freeValid ? { position: gridPos.clone(), heading: state.dragRotation, valid: true, elevation: state.dragElevation } : null);
 
                 state.previewMesh3D.traverse(child => {
                     if (child.isMesh && child.material) {
@@ -348,10 +409,13 @@ export function endDragExisting(event) {
         updateTrackStatus();
     } else if (state.currentSnapValid && state.currentSnap && state.draggedPieceIndex >= 0) {
         const piece = state.placedPieces[state.draggedPieceIndex];
+        const newElevation = state.currentSnap.elevation || 0;
 
         piece.position.copy(state.currentSnap.position);
+        piece.position.y = newElevation * ELEVATION.HEIGHT_PER_LEVEL;
         piece.heading = state.currentSnap.heading;
-        piece.mesh.position.copy(state.currentSnap.position);
+        piece.elevation = newElevation;
+        piece.mesh.position.copy(piece.position);
         piece.mesh.rotation.y = state.currentSnap.heading;
 
         piece.mesh.visible = true;
@@ -393,6 +457,11 @@ export function endDragExisting(event) {
         state.setPreviewMesh3D(null);
     }
 
+    // Clear grid highlights
+    if (hasCustomGrid()) {
+        clearHighlights();
+    }
+
     document.getElementById('drop-indicator').style.display = 'none';
 
     // Hide delete overlay
@@ -423,6 +492,7 @@ export function onCanvasMouseDown(event) {
     const pieceIndex = getClickedPiece(event.clientX, event.clientY);
     if (pieceIndex >= 0) {
         event.preventDefault();
+        event.stopPropagation();
         startDragExisting(pieceIndex, event);
         return;
     }
@@ -431,6 +501,7 @@ export function onCanvasMouseDown(event) {
     const decoIndex = getClickedDecoration(event.clientX, event.clientY);
     if (decoIndex >= 0) {
         event.preventDefault();
+        event.stopPropagation();
         startDragExistingDecoration(decoIndex, event);
     }
 }

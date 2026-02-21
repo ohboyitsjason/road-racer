@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import * as state from '../state.js';
-import { AI_CONFIG, PHYSICS } from '../constants.js';
+import { AI_CONFIG, PHYSICS, PIECE_DATA } from '../constants.js';
 import { createCar, getAICarColors, updateAICarTheme } from '../car/car.js';
 import { scene } from '../scene.js';
 import { updateLeaderboard } from '../ui/leaderboard.js';
@@ -48,9 +48,11 @@ export function setupAICars() {
         aiCar.userData.colorIndex = i;
         scene.add(aiCar);
 
-        // Calculate grid position behind start line
+        // Calculate grid position behind start line (which is at length - 5)
         const gridPos = gridPositions[i] || { row: Math.floor(i / 2) + 1, lane: (i % 2 === 0 ? -3 : 3) };
-        const forwardOffset = -5 - (gridPos.row * rowSpacing); // Behind start line
+        const startPieceLength = PIECE_DATA['start'].length;
+        // Start line is at length - 5, position cars 10 units behind that, on the piece
+        const forwardOffset = startPieceLength - 15 - (gridPos.row * rowSpacing);
         const lateralOffset = gridPos.lane;
 
         const gridOffset = new THREE.Vector3(lateralOffset, 0, forwardOffset)
@@ -65,10 +67,10 @@ export function setupAICars() {
         const heading = startPiece.heading;
         const lanePos = lateralOffset;
 
-        // Calculate initial trackPosition based on how far behind start line
+        // Calculate initial trackPosition based on how far along the start piece
         // This prevents the AI from trying to "jump" to trackPosition 0
         const curveLength = state.roadCurve ? state.roadCurve.getLength() : 200;
-        const initialTrackPosition = forwardOffset / curveLength; // Negative value, behind start
+        const initialTrackPosition = forwardOffset / curveLength; // Position on the start piece, behind start line
 
         // Get personality for this car (3.3)
         const personalityKey = AI_CONFIG.aiPersonalities[i] || 'balanced';

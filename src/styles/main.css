@@ -7,7 +7,7 @@
 }
 body {
     overflow: hidden;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: 'Paytone One', sans-serif;
 }
 #canvas-container {
     width: 100vw;
@@ -524,7 +524,7 @@ body {
     width: 100%;
 }
 .menu-label {
-    font-family: 'Inter', sans-serif;
+    font-family: 'Paytone One', sans-serif;
     font-size: 14px;
     color: rgba(255, 255, 255, 0.7);
     text-align: center;
@@ -537,7 +537,7 @@ body {
 .theme-btn {
     flex: 1;
     padding: 10px 16px;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Paytone One', sans-serif;
     font-size: 16px;
     font-weight: 500;
     color: rgba(255, 255, 255, 0.8);
@@ -687,7 +687,7 @@ body {
 }
 
 .htp-text {
-    font-family: 'Inter', sans-serif;
+    font-family: 'Paytone One', sans-serif;
     font-size: 20px;
     color: white;
     margin: 0;
@@ -715,7 +715,7 @@ body {
 }
 
 .htp-control-keys {
-    font-family: 'Inter', sans-serif;
+    font-family: 'Paytone One', sans-serif;
     font-size: 20px;
     color: white;
     margin: 0;
@@ -898,7 +898,7 @@ body {
     padding: 15px 25px;
     border-radius: 10px;
     font-size: 32px;
-    font-family: 'Courier New', monospace;
+    font-family: 'Paytone One', sans-serif;
     z-index: 100;
     display: none;
 }

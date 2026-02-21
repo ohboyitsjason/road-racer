@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import * as state from './state.js';
-import { scene, camera, controls, renderer, gridHelper } from './scene.js';
+import { PIECE_DATA } from './constants.js';
+import { scene, camera, controls, renderer, gridHelper, showBuildingGrid, initCustomGrid, setDOFEnabled, composer } from './scene.js';
 import { setBuildModeCamera, setRaceModeCamera } from './ui/camera.js';
 import { startDrag, updateDragPosition, endDrag, onCanvasMouseDown, getClickedPiece, getClickedDecoration, startDragExisting, updateDragExisting, endDragExisting, startDragDecoration, updateDragDecoration, endDragDecoration, isDraggingDecorationActive, rotateDecorationPreview, startDragExistingDecoration, updateDragExistingDecoration, endDragExistingDecoration, isDraggingExistingDecorationActive, getLastMousePosition, startDragObstacle, updateDragObstacle, endDragObstacle, isDraggingObstacleActive, rotateObstaclePreview } from './ui/dragAndDrop.js';
 import { clearTrack } from './track/trackState.js';
@@ -15,6 +16,7 @@ import { rebuildTrackMeshCache } from './car/surfacePhysics.js';
 import { playMenuMusic, playBuilderMusic, stopAllMusic, playWhoosh, toggleMute, getMuted, playDelete } from './audio/audioManager.js';
 import { initGalleryUI, showGallery } from './ui/galleryUI.js';
 import { setTheme, getCurrentThemeName, onThemeChange } from './theme/themeManager.js';
+import { ELEVATION } from './constants.js';
 
 export function setupEventListeners() {
     // Splash screen - click to unlock audio and show title screen
@@ -94,6 +96,7 @@ export function setupEventListeners() {
     // Enter build mode - show gallery and enable building
     function enterBuildMode() {
         state.setGameState('building');
+        state.setCameraMode('near'); // Reset camera mode for next race
 
         // Initialize gallery UI if first time
         initGalleryUI();
@@ -106,7 +109,7 @@ export function setupEventListeners() {
         document.getElementById('speedometer').style.display = 'none';
 
         // Show grid and enable camera controls
-        gridHelper.visible = true;
+        showBuildingGrid(true);
         controls.enabled = true;
 
         // Show direction arrows in build mode
@@ -119,6 +122,7 @@ export function setupEventListeners() {
         });
 
         setBuildModeCamera();
+        setDOFEnabled(false);
 
         // Update track status to show/hide race button
         updateTrackStatus();
@@ -170,6 +174,20 @@ export function setupEventListeners() {
                 }
                 return;
             }
+        }
+
+        // Cycle camera mode during race with C or V key
+        if ((e.key.toLowerCase() === 'c' || e.key.toLowerCase() === 'v') && state.gameState === 'racing' && !state.isPaused) {
+            const newMode = state.cycleCameraMode();
+            // Brief on-screen indicator
+            const indicator = document.getElementById('drop-indicator');
+            const modeLabels = { 'near': 'Chase Cam', 'far': 'Wide Cam', 'first-person': 'Hood Cam' };
+            indicator.textContent = modeLabels[newMode];
+            indicator.style.display = 'block';
+            indicator.style.background = 'rgba(0, 0, 0, 0.7)';
+            clearTimeout(indicator._camTimeout);
+            indicator._camTimeout = setTimeout(() => { indicator.style.display = 'none'; }, 1500);
+            return;
         }
 
         // Start building with Enter or Space from title screen
@@ -342,9 +360,10 @@ export function setupEventListeners() {
         showGallery(false);
         document.getElementById('race-btn').style.display = 'none';
 
-        gridHelper.visible = false;
+        showBuildingGrid(false);
         controls.enabled = false;
         setRaceModeCamera();
+        setDOFEnabled(true);
 
         buildRoadCurve();
 
@@ -372,8 +391,10 @@ export function setupEventListeners() {
 
         // Find start piece and position car in starting grid (pole position - front left)
         const startPiece = state.placedPieces.find(p => p.type === 'start');
-        // Grid position: Row 0 (front), left lane (-3 lateral offset), behind start line (-5 forward)
-        const forwardOffset = -5; // 5 units behind start line
+        // Grid position: Row 0 (front), left lane (-3 lateral offset), behind start line
+        // Start line is at length - 5 (z=35 for 40-unit piece), so position cars at length - 15 (z=25)
+        const startPieceLength = PIECE_DATA['start'].length;
+        const forwardOffset = startPieceLength - 15; // 10 units behind start line, on the piece
         const gridOffset = new THREE.Vector3(-3, 0, forwardOffset).applyAxisAngle(new THREE.Vector3(0, 1, 0), startPiece.heading);
         const startPosition = startPiece.position.clone().add(gridOffset);
         startPosition.y = 0.7; // Start above track surface (0.15) + car height (0.5)
@@ -625,7 +646,7 @@ export function setupEventListeners() {
     });
 
     // Canvas mouse/touch for picking up existing pieces
-    renderer.domElement.addEventListener('mousedown', onCanvasMouseDown);
+    renderer.domElement.addEventListener('pointerdown', onCanvasMouseDown);
     renderer.domElement.addEventListener('touchstart', (e) => {
         if (state.gameState !== 'building') return;
         const touch = e.touches[0];
@@ -646,8 +667,23 @@ export function setupEventListeners() {
         }
     }, { passive: false });
 
-    // R key rotation during drag
+    // R key rotation during drag, Q/E for elevation
     window.addEventListener('keydown', (e) => {
+        // Q = raise elevation, E = lower elevation (during drag, free placement)
+        if (e.key.toLowerCase() === 'q' && (state.isDragging || state.isDraggingExisting)) {
+            state.setDragElevation(Math.min(state.dragElevation + 1, ELEVATION.MAX_LEVEL));
+            const lastPos = getLastMousePosition();
+            if (state.isDragging) updateDragPosition(lastPos);
+            else if (state.isDraggingExisting) updateDragExisting(lastPos);
+            return;
+        }
+        if (e.key.toLowerCase() === 'e' && (state.isDragging || state.isDraggingExisting)) {
+            state.setDragElevation(Math.max(state.dragElevation - 1, ELEVATION.MIN_LEVEL));
+            const lastPos = getLastMousePosition();
+            if (state.isDragging) updateDragPosition(lastPos);
+            else if (state.isDraggingExisting) updateDragExisting(lastPos);
+            return;
+        }
         if (e.key.toLowerCase() === 'r') {
             const lastPos = getLastMousePosition();
             if (state.isDragging) {
@@ -677,5 +713,6 @@ export function setupEventListeners() {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
+        composer.setSize(window.innerWidth, window.innerHeight);
     });
 }

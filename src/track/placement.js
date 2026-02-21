@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import * as state from '../state.js';
 import { scene, raycaster, mouseVec, groundPlane, camera } from '../scene.js';
 import { PIECE_DEFS } from './pieces.js';
-import { DECORATION_DATA, PIECE_DATA, PHYSICS } from '../constants.js';
+import { DECORATION_DATA, PIECE_DATA, PHYSICS, ELEVATION } from '../constants.js';
 import { obstacles } from '../obstacles/obstacleState.js';
+import { getRugBounds } from '../effects/bedroom.js';
 
 // Calculate piece endpoint (position and heading at the end of a placed piece)
 export function getPieceEndpoint(piece) {
@@ -31,7 +32,13 @@ export function getPieceEndpoint(piece) {
     endPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), piece.heading);
     endPos.add(piece.position);
 
-    return { position: endPos, heading: endHeading };
+    // Calculate end elevation
+    const pieceElevation = piece.elevation || 0;
+    const elevationDelta = def.elevationDelta || 0;
+    const endElevation = pieceElevation + elevationDelta;
+    endPos.y = endElevation * ELEVATION.HEIGHT_PER_LEVEL;
+
+    return { position: endPos, heading: endHeading, elevation: endElevation };
 }
 
 // Get the local endpoint of a piece type (relative to start at origin, heading 0)
@@ -76,17 +83,28 @@ export function calcPlacementForEndAtTarget(targetPos, targetHeading, pieceType)
 export function getPieceEndpoints(piece) {
     const startPos = piece.position.clone();
     const startHeading = piece.heading;
+    const startElevation = piece.elevation || 0;
+    startPos.y = startElevation * ELEVATION.HEIGHT_PER_LEVEL;
     const end = getPieceEndpoint(piece);
     return {
-        start: { position: startPos, heading: startHeading },
-        end: { position: end.position, heading: end.heading }
+        start: { position: startPos, heading: startHeading, elevation: startElevation },
+        end: { position: end.position, heading: end.heading, elevation: end.elevation }
     };
 }
 
 // Check if a placement would overlap with existing pieces or decorations
-export function checkPlacementValid(position, heading, pieceType, connectingTo = null) {
+export function checkPlacementValid(position, heading, pieceType, connectingTo = null, elevation = 0) {
     const def = PIECE_DEFS[pieceType];
     if (!def) return false;
+
+    // Reject placement outside rug bounds (pastel theme)
+    const rug = getRugBounds();
+    if (rug) {
+        if (position.x < rug.minX || position.x > rug.maxX ||
+            position.z < rug.minZ || position.z > rug.maxZ) {
+            return false;
+        }
+    }
 
     const newStart = position.clone();
     const localEnd = getLocalEndpoint(pieceType);
@@ -95,9 +113,19 @@ export function checkPlacementValid(position, heading, pieceType, connectingTo =
     const newEnd = position.clone().add(rotatedEnd);
     const newMid = newStart.clone().add(newEnd).multiplyScalar(0.5);
 
+    const newElevation = elevation;
+    const newEndElevation = newElevation + (def.elevationDelta || 0);
+
     // Check against existing track pieces
     for (const piece of state.placedPieces) {
         if (connectingTo && piece === connectingTo) continue;
+
+        // Skip overlap check for pieces at different elevation levels (allow crossovers)
+        const pieceElev = piece.elevation || 0;
+        const pieceDef = PIECE_DEFS[piece.type];
+        const pieceEndElev = pieceElev + (pieceDef ? (pieceDef.elevationDelta || 0) : 0);
+        // If both start and end elevations differ, pieces can cross over
+        if (Math.abs(pieceElev - newElevation) >= 1 && Math.abs(pieceEndElev - newEndElevation) >= 1) continue;
 
         const existingStart = piece.position.clone();
         const existingEndpoint = getPieceEndpoint(piece);
@@ -253,68 +281,100 @@ export function findSnapPoint(mousePos, userRotation) {
     const localEnd = getLocalEndpoint(state.dragPieceType);
     const connectedPoints = getConnectedEndpoints();
 
+    const ourDelta = PIECE_DEFS[state.dragPieceType] ? (PIECE_DEFS[state.dragPieceType].elevationDelta || 0) : 0;
+
     for (let i = 0; i < state.placedPieces.length; i++) {
         const piece = state.placedPieces[i];
         const theirEndpoints = getPieceEndpoints(piece);
         const connected = connectedPoints.get(i) || { startConnected: false, endConnected: false };
 
-        // Check mouse near THEIR END
+        // Check mouse near THEIR END (use XZ distance for snap detection so elevation doesn't interfere)
         if (!connected.endConnected) {
-            const dist = mousePos.distanceTo(theirEndpoints.end.position);
-            if (dist < snapDistance) {
-                // OUR START to THEIR END: continue track in same direction
-                const headingAB = theirEndpoints.end.heading;
-                allSnaps.push({
-                    position: theirEndpoints.end.position.clone(),
-                    heading: headingAB,
-                    type: 'our-start-to-their-end',
-                    distance: dist,
-                    piece: piece
-                });
+            const dist2D = new THREE.Vector2(mousePos.x - theirEndpoints.end.position.x, mousePos.z - theirEndpoints.end.position.z).length();
+            if (dist2D < snapDistance) {
+                // OUR START to THEIR END: our elevation = their end elevation
+                const elevAB = theirEndpoints.end.elevation;
+                const endElevAB = elevAB + ourDelta;
+                if (elevAB >= ELEVATION.MIN_LEVEL && elevAB <= ELEVATION.MAX_LEVEL &&
+                    endElevAB >= ELEVATION.MIN_LEVEL && endElevAB <= ELEVATION.MAX_LEVEL) {
+                    const headingAB = theirEndpoints.end.heading;
+                    const posAB = theirEndpoints.end.position.clone();
+                    posAB.y = elevAB * ELEVATION.HEIGHT_PER_LEVEL;
+                    allSnaps.push({
+                        position: posAB,
+                        heading: headingAB,
+                        type: 'our-start-to-their-end',
+                        distance: dist2D,
+                        piece: piece,
+                        elevation: elevAB
+                    });
+                }
 
-                // OUR END to THEIR END: our piece curves back from their end
-                const headingBB = theirEndpoints.end.heading + Math.PI - localEnd.heading;
-                const rotEndBB = computeRotatedEnd(state.dragPieceType, headingBB);
-                allSnaps.push({
-                    position: theirEndpoints.end.position.clone().sub(rotEndBB),
-                    heading: headingBB,
-                    type: 'our-end-to-their-end',
-                    distance: dist,
-                    piece: piece
-                });
+                // OUR END to THEIR END: our end elevation = their end elevation, so our start = their end - delta
+                const elevBB = theirEndpoints.end.elevation - ourDelta;
+                if (elevBB >= ELEVATION.MIN_LEVEL && elevBB <= ELEVATION.MAX_LEVEL &&
+                    theirEndpoints.end.elevation >= ELEVATION.MIN_LEVEL && theirEndpoints.end.elevation <= ELEVATION.MAX_LEVEL) {
+                    const headingBB = theirEndpoints.end.heading + Math.PI - localEnd.heading;
+                    const rotEndBB = computeRotatedEnd(state.dragPieceType, headingBB);
+                    const posBB = theirEndpoints.end.position.clone().sub(rotEndBB);
+                    posBB.y = elevBB * ELEVATION.HEIGHT_PER_LEVEL;
+                    allSnaps.push({
+                        position: posBB,
+                        heading: headingBB,
+                        type: 'our-end-to-their-end',
+                        distance: dist2D,
+                        piece: piece,
+                        elevation: elevBB
+                    });
+                }
             }
         }
 
         // Check mouse near THEIR START
         if (!connected.startConnected) {
-            const dist = mousePos.distanceTo(theirEndpoints.start.position);
-            if (dist < snapDistance) {
-                // OUR END to THEIR START: our end meets their start
-                const headingBA = theirEndpoints.start.heading - localEnd.heading;
-                const rotEndBA = computeRotatedEnd(state.dragPieceType, headingBA);
-                allSnaps.push({
-                    position: theirEndpoints.start.position.clone().sub(rotEndBA),
-                    heading: headingBA,
-                    type: 'our-end-to-their-start',
-                    distance: dist,
-                    piece: piece
-                });
+            const dist2D = new THREE.Vector2(mousePos.x - theirEndpoints.start.position.x, mousePos.z - theirEndpoints.start.position.z).length();
+            if (dist2D < snapDistance) {
+                // OUR END to THEIR START: our end elevation = their start elevation, so our start = their start - delta
+                const elevBA = theirEndpoints.start.elevation - ourDelta;
+                if (elevBA >= ELEVATION.MIN_LEVEL && elevBA <= ELEVATION.MAX_LEVEL &&
+                    theirEndpoints.start.elevation >= ELEVATION.MIN_LEVEL && theirEndpoints.start.elevation <= ELEVATION.MAX_LEVEL) {
+                    const headingBA = theirEndpoints.start.heading - localEnd.heading;
+                    const rotEndBA = computeRotatedEnd(state.dragPieceType, headingBA);
+                    const posBA = theirEndpoints.start.position.clone().sub(rotEndBA);
+                    posBA.y = elevBA * ELEVATION.HEIGHT_PER_LEVEL;
+                    allSnaps.push({
+                        position: posBA,
+                        heading: headingBA,
+                        type: 'our-end-to-their-start',
+                        distance: dist2D,
+                        piece: piece,
+                        elevation: elevBA
+                    });
+                }
 
-                // OUR START to THEIR START: our piece faces opposite direction
-                const headingAA = theirEndpoints.start.heading + Math.PI;
-                allSnaps.push({
-                    position: theirEndpoints.start.position.clone(),
-                    heading: headingAA,
-                    type: 'our-start-to-their-start',
-                    distance: dist,
-                    piece: piece
-                });
+                // OUR START to THEIR START: our elevation = their start elevation
+                const elevAA = theirEndpoints.start.elevation;
+                const endElevAA = elevAA + ourDelta;
+                if (elevAA >= ELEVATION.MIN_LEVEL && elevAA <= ELEVATION.MAX_LEVEL &&
+                    endElevAA >= ELEVATION.MIN_LEVEL && endElevAA <= ELEVATION.MAX_LEVEL) {
+                    const headingAA = theirEndpoints.start.heading + Math.PI;
+                    const posAA = theirEndpoints.start.position.clone();
+                    posAA.y = elevAA * ELEVATION.HEIGHT_PER_LEVEL;
+                    allSnaps.push({
+                        position: posAA,
+                        heading: headingAA,
+                        type: 'our-start-to-their-start',
+                        distance: dist2D,
+                        piece: piece,
+                        elevation: elevAA
+                    });
+                }
             }
         }
     }
 
     const validSnaps = allSnaps.filter(snap =>
-        checkPlacementValid(snap.position, snap.heading, state.dragPieceType, snap.piece)
+        checkPlacementValid(snap.position, snap.heading, state.dragPieceType, snap.piece, snap.elevation)
     );
 
     if (validSnaps.length === 0) return null;
@@ -416,10 +476,131 @@ export function removeEndpointMarkers(piece) {
         piece.endpointMarkers = null;
     }
 }
-//
+// Find the highest track surface Y below a given world position
+// Uses local-space footprint check for accuracy
+function findTrackFloorBelow(worldX, worldZ, maxY) {
+    let floorY = 0;
+    const halfWidth = PHYSICS.trackWidth + 2; // Track half-width with small buffer
+
+    for (const piece of state.placedPieces) {
+        const pieceElev = (piece.elevation || 0) * ELEVATION.HEIGHT_PER_LEVEL;
+        const pieceDef = PIECE_DEFS[piece.type];
+        if (!pieceDef) continue;
+        const pieceEndElev = pieceElev + (pieceDef.elevationDelta || 0) * ELEVATION.HEIGHT_PER_LEVEL;
+        const pieceTopY = Math.max(pieceElev, pieceEndElev);
+        // Only consider pieces below our level
+        if (pieceTopY >= maxY || pieceTopY <= floorY) continue;
+
+        // Transform world position into piece's local space
+        const dx = worldX - piece.position.x;
+        const dz = worldZ - piece.position.z;
+        const cosH = Math.cos(-piece.heading);
+        const sinH = Math.sin(-piece.heading);
+        const localX = dx * cosH - dz * sinH;
+        const localZ = dx * sinH + dz * cosH;
+
+        if (pieceDef.curveAngle > 0) {
+            // For curves, check if point is within the arc's annular sector
+            const radius = pieceDef.curveRadius;
+            const dir = pieceDef.direction;
+            // Center of the curve arc in local space
+            const cx = dir > 0 ? -radius : radius;
+            const cz = 0;
+            const relX = localX - cx;
+            const relZ = localZ - cz;
+            const dist = Math.sqrt(relX * relX + relZ * relZ);
+            const innerR = radius - halfWidth;
+            const outerR = radius + halfWidth;
+            if (dist < innerR || dist > outerR) continue;
+            // Check angle within the arc
+            const angle = Math.atan2(relZ, dir > 0 ? relX : -relX);
+            if (angle < -0.1 || angle > pieceDef.curveAngle + 0.1) continue;
+        } else {
+            // For straights/ramps, check rectangular footprint
+            const length = pieceDef.length || 20;
+            if (localX < -halfWidth || localX > halfWidth) continue;
+            if (localZ < -2 || localZ > length + 2) continue;
+        }
+
+        floorY = Math.max(floorY, pieceTopY + 0.3);
+    }
+    return floorY;
+}
+
+// Add support pillars under elevated track pieces
+// group is the mesh group (local origin at piece start), positioned at worldPosition with worldHeading
+function addSupportPillars(group, def, elevation, worldPosition, worldHeading) {
+    const elevationY = elevation * ELEVATION.HEIGHT_PER_LEVEL;
+    const width = PHYSICS.trackWidth * 2;
+    const pillarMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+    const elevDelta = def.elevationDelta || 0;
+    const cosH = Math.cos(worldHeading);
+    const sinH = Math.sin(worldHeading);
+
+    // Helper: create a pillar at a local XZ position on the piece
+    // localSurfaceY = world Y of track surface at this point
+    function placePillar(localX, localZ, localSurfaceY) {
+        if (localSurfaceY <= 0) return;
+        // Convert local position to world XZ for floor detection
+        const worldX = worldPosition.x + localX * cosH - localZ * sinH;
+        const worldZ = worldPosition.z + localX * sinH + localZ * cosH;
+        const floorY = findTrackFloorBelow(worldX, worldZ, localSurfaceY);
+        const pillarH = localSurfaceY - floorY;
+        if (pillarH <= 0.5) return;
+
+        const pillarGeom = new THREE.CylinderGeometry(0.5, 0.7, pillarH, 6);
+        const pillar = new THREE.Mesh(pillarGeom, pillarMat);
+        // Group origin is at world Y = elevationY
+        // Pillar center in world Y = floorY + pillarH/2 = (floorY + localSurfaceY) / 2
+        // In local Y = world Y - elevationY
+        pillar.position.set(localX, (floorY + localSurfaceY) / 2 - elevationY, localZ);
+        pillar.castShadow = true;
+        group.add(pillar);
+    }
+
+    if (def.curveAngle > 0) {
+        const radius = def.curveRadius;
+        const angle = def.curveAngle;
+        const dir = def.direction;
+        const numPillars = Math.max(2, Math.ceil(angle / (Math.PI / 4)) * 2);
+
+        for (let i = 0; i < numPillars; i++) {
+            const t = (i + 0.5) / numPillars;
+            const a = t * angle;
+
+            [-1, 1].forEach(side => {
+                const r = radius + side * (width / 2 - 1);
+                let localX, localZ;
+                if (dir > 0) {
+                    localX = -radius + r * Math.cos(a);
+                    localZ = r * Math.sin(a);
+                } else {
+                    localX = radius - r * Math.cos(a);
+                    localZ = r * Math.sin(a);
+                }
+                placePillar(localX, localZ, elevationY);
+            });
+        }
+    } else {
+        const length = def.length || 20;
+        const numPillars = Math.max(2, Math.ceil(length / 15));
+
+        for (let i = 0; i < numPillars; i++) {
+            const t = (i + 0.5) / numPillars;
+            const localZ = t * length;
+            // For ramps, surface Y varies along the slope
+            const surfaceWorldY = elevationY + t * elevDelta * ELEVATION.HEIGHT_PER_LEVEL;
+
+            [-1, 1].forEach(side => {
+                placePillar(side * (width / 2 - 1), localZ, surfaceWorldY);
+            });
+        }
+    }
+}
+
 // Place a track piece at a specific position and heading
 // NOTE: Callers must call updateTrackStatus() after this function
-export function placePieceAt(type, position, heading) {
+export function placePieceAt(type, position, heading, elevation = 0) {
     const def = PIECE_DEFS[type];
     if (!def) return;
 
@@ -427,9 +608,19 @@ export function placePieceAt(type, position, heading) {
         return;
     }
 
-    const mesh = def.createMesh(def, false);
+    const elevationY = elevation * ELEVATION.HEIGHT_PER_LEVEL;
+    position.y = elevationY;
+
+    const colorIndex = state.placedPieces.length % 3;
+    const mesh = def.createMesh(def, false, colorIndex);
     mesh.position.copy(position);
     mesh.rotation.y = heading;
+
+    // Add support pillars for elevated pieces
+    if (elevation > 0) {
+        addSupportPillars(mesh, def, elevation, position, heading);
+    }
+
     scene.add(mesh);
 
     const piece = {
@@ -437,7 +628,10 @@ export function placePieceAt(type, position, heading) {
         mesh: mesh,
         position: position.clone(),
         heading: heading,
-        def: def
+        def: def,
+        elevation: elevation,
+        colorIndex: colorIndex,
+        rampVariant: def.isRamp ? 'single' : undefined
     };
 
     state.placedPieces.push(piece);

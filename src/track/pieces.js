@@ -1,43 +1,142 @@
 import * as THREE from 'three';
-import { PHYSICS, PIECE_DATA } from '../constants.js';
-import { addBarriersToStraight, addBarriersToCurve, addMarkingsToStraight, addMarkingsToCurve } from './barriers.js';
-import { getColor, getThemeObject, onThemeChange } from '../theme/themeManager.js';
+import { PHYSICS, PIECE_DATA, ELEVATION } from '../constants.js';
+import {
+    addBarriersToStraight, addBarriersToCurve, addMarkingsToStraight, addMarkingsToCurve,
+    addBarriersToRamp, addMarkingsToRamp,
+    addWallsToStraight, addWallsToCurve, addWallsToRamp,
+    addStripesToRamp
+} from './barriers.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { getColor, getThemeObject, onThemeChange, getCurrentThemeName } from '../theme/themeManager.js';
 
 // Track all piece materials for theme updates
 const pieceMaterials = new Set();
 
-function createStraightPiece(def, isPreview = false) {
+// Get the sequence color for a piece based on its colorIndex
+function getSequenceColor(colorIndex) {
+    const sequence = getThemeObject('road.sequence');
+    if (sequence && sequence.length > 0) {
+        return sequence[colorIndex % sequence.length];
+    }
+    return getColor('road.color');
+}
+
+// GLB model cache: { 'sm': gltf, 'sm-placed': gltf, 'md': gltf, ... }
+const trackModelCache = {};
+let trackModelsLoaded = false;
+let trackModelsLoading = false;
+const trackModelCallbacks = [];
+
+// Size mapping: piece length → model size key
+function getModelSize(length) {
+    if (length <= 20) return 'sm';
+    if (length <= 40) return 'md';
+    return 'lg';
+}
+
+function preloadTrackModels(callback) {
+    if (trackModelsLoaded) {
+        if (callback) callback();
+        return;
+    }
+    if (callback) trackModelCallbacks.push(callback);
+    if (trackModelsLoading) return;
+    trackModelsLoading = true;
+
+    const loader = new GLTFLoader();
+    const variants = [
+        'sm', 'sm-placed', 'md', 'md-placed', 'lg', 'lg-placed',
+        'curve-45', 'curve-45-placed', 'curve-90', 'curve-90-placed',
+        'ramp-single', 'ramp-connected-bottom', 'ramp-connected-top', 'ramp-connected',
+        'loop-placed'
+    ];
+    let loaded = 0;
+
+    variants.forEach(variant => {
+        loader.load(`src/assets/models/trackpiece-${variant}.glb`, (gltf) => {
+            trackModelCache[variant] = gltf;
+            loaded++;
+            if (loaded === variants.length) {
+                trackModelsLoaded = true;
+                trackModelCallbacks.forEach(cb => cb());
+                trackModelCallbacks.length = 0;
+            }
+        });
+    });
+}
+
+// Start preloading immediately on module import
+preloadTrackModels();
+
+function fitModelToTrack(model, targetWidth, targetLength) {
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+
+    const scaleX = targetWidth / size.x;
+    const scaleZ = targetLength / size.z;
+    // Use width-based scale for Y so barrier heights are consistent across all pieces
+    model.scale.set(scaleX, scaleX, scaleZ);
+
+    // Recompute after scaling
+    const scaledBox = new THREE.Box3().setFromObject(model);
+
+    // Position: floor at Y=0.15, centered on X, start at Z=0
+    model.position.y += 0.15 - scaledBox.min.y;
+    model.position.x -= (scaledBox.max.x + scaledBox.min.x) / 2;
+    model.position.z -= scaledBox.min.z;
+}
+
+function createStraightPiece(def, isPreview = false, colorIndex = 0) {
     const group = new THREE.Group();
     const width = PHYSICS.trackWidth * 2;
+    const pieceColor = isPreview ? 0x666666 : getSequenceColor(colorIndex);
+    const nextColor = getSequenceColor(colorIndex + 1);
+    const sizeKey = getModelSize(def.length);
+    const variantKey = sizeKey + '-placed';
 
-    const roadGeom = new THREE.PlaneGeometry(width, def.length);
-    const roadMat = new THREE.MeshStandardMaterial({
-        color: isPreview ? 0x666666 : getColor('road.color'),
-        roughness: getColor('road.roughness'),
-        transparent: isPreview,
-        opacity: isPreview ? 0.7 : 1
-    });
-    if (!isPreview) {
-        roadMat.userData.themeKey = 'road.color';
-        pieceMaterials.add(roadMat);
+    function addModel(gltfData) {
+        const model = gltfData.scene.clone();
+        stripNonMeshNodes(model);
+        fitModelToTrack(model, width, def.length);
+
+        model.traverse(child => {
+            if (child.isMesh) {
+                child.material = child.material.clone();
+                child.receiveShadow = true;
+                child.castShadow = true;
+                tameModelMaterial(child.material);
+
+                if (child.material.name === 'Road Stripe 2') {
+                    child.material.color.setHex(isPreview ? 0x666666 : nextColor);
+                } else {
+                    child.material.color.setHex(pieceColor);
+                }
+
+                if (isPreview) {
+                    child.material.transparent = true;
+                    child.material.opacity = 0.7;
+                } else {
+                    pieceMaterials.add(child.material);
+                }
+            }
+        });
+
+        group.add(model);
     }
-    const road = new THREE.Mesh(roadGeom, roadMat);
-    road.rotation.x = -Math.PI / 2;
-    road.position.y = 0.15;
-    road.position.z = def.length / 2;
-    road.receiveShadow = true;
-    group.add(road);
 
-    if (!isPreview) {
-        addBarriersToStraight(group, def.length, width);
-        addMarkingsToStraight(group, def.length);
+    const gltfData = trackModelCache[variantKey];
+    if (gltfData) {
+        addModel(gltfData);
+    } else {
+        // Models still loading — add once ready
+        preloadTrackModels(() => addModel(trackModelCache[variantKey]));
     }
 
     return group;
 }
 
-function createStartPiece(def, isPreview = false) {
-    const group = createStraightPiece(def, isPreview);
+function createStartPiece(def, isPreview = false, colorIndex = 0) {
+    const group = createStraightPiece(def, isPreview, colorIndex);
     const length = def.length;
 
     // Add direction arrow (visible in build mode only)
@@ -83,7 +182,8 @@ function createStartPiece(def, isPreview = false) {
     group.add(arrow);
 
     if (!isPreview) {
-        // Start/finish line (checkered pattern)
+        // Start/finish line (checkered pattern) - positioned near exit edge (direction of flow)
+        const startLineZ = length - 5; // 5 units from exit edge
         const startGeom = new THREE.PlaneGeometry(PHYSICS.trackWidth * 2 - 2, 2.5);
         const canvas = document.createElement('canvas');
         canvas.width = 128;
@@ -99,21 +199,21 @@ function createStartPiece(def, isPreview = false) {
         const startMat = new THREE.MeshBasicMaterial({ map: texture });
         const startLine = new THREE.Mesh(startGeom, startMat);
         startLine.rotation.x = -Math.PI / 2;
-        startLine.position.set(0, 0.2, 5);
+        startLine.position.set(0, 0.2, startLineZ);
         group.add(startLine);
 
-        // Start gantry
+        // Start gantry - positioned at start line
         const gantryMat = new THREE.MeshStandardMaterial({ color: 0x444444 });
         [-1, 1].forEach(side => {
             const poleGeom = new THREE.CylinderGeometry(0.4, 0.4, 10, 8);
             const pole = new THREE.Mesh(poleGeom, gantryMat);
-            pole.position.set(side * (PHYSICS.trackWidth + 1), 5, 5);
+            pole.position.set(side * (PHYSICS.trackWidth + 1), 5, startLineZ);
             pole.castShadow = true;
             group.add(pole);
         });
         const crossbarGeom = new THREE.BoxGeometry(PHYSICS.trackWidth * 2 + 4, 1.5, 1.5);
         const crossbar = new THREE.Mesh(crossbarGeom, gantryMat);
-        crossbar.position.set(0, 10, 5);
+        crossbar.position.set(0, 10, startLineZ);
         crossbar.castShadow = true;
         group.add(crossbar);
     }
@@ -121,78 +221,162 @@ function createStartPiece(def, isPreview = false) {
     return group;
 }
 
-function createCurvePiece(def, isPreview = false) {
+function getCurveModelKey(angle) {
+    if (angle <= Math.PI / 4 + 0.01) return 'curve-45';
+    return 'curve-90';
+}
+
+// Remove non-mesh leaf nodes (e.g. BézierCircle) that can interfere with bounding box or rendering
+function stripNonMeshNodes(model) {
+    const toRemove = [];
+    model.traverse(child => {
+        if (child !== model && !child.isMesh && child.children.length === 0) {
+            toRemove.push(child);
+        }
+    });
+    toRemove.forEach(child => child.parent && child.parent.remove(child));
+}
+
+// Reduce specular intensity on GLB materials to prevent bright highlights triggering god rays
+function tameModelMaterial(mat) {
+    if (mat.clearcoat !== undefined) mat.clearcoat = Math.min(mat.clearcoat, 0.1);
+    if (mat.anisotropy !== undefined) mat.anisotropy = Math.min(mat.anisotropy, 0.2);
+    mat.roughness = Math.max(mat.roughness || 0, 0.4);
+    mat.metalness = Math.min(mat.metalness || 0, 0.3);
+}
+
+// Flip geometry vertices directly to avoid negative scale (which causes shadow/post-processing artifacts)
+function flipModelGeometry(model, flipX, flipZ) {
+    const needsWindingFlip = flipX !== flipZ; // Odd number of flips reverses winding
+    model.traverse(child => {
+        if (child === model) return; // Skip root
+        // Flip the Object3D position to match the vertex flip
+        if (flipX) child.position.x = -child.position.x;
+        if (flipZ) child.position.z = -child.position.z;
+
+        if (child.isMesh && child.geometry) {
+            child.geometry = child.geometry.clone();
+            const pos = child.geometry.attributes.position;
+            const normal = child.geometry.attributes.normal;
+            for (let i = 0; i < pos.count; i++) {
+                if (flipX) pos.setX(i, -pos.getX(i));
+                if (flipZ) pos.setZ(i, -pos.getZ(i));
+                if (normal) {
+                    if (flipX) normal.setX(i, -normal.getX(i));
+                    if (flipZ) normal.setZ(i, -normal.getZ(i));
+                }
+            }
+            // Reverse face winding if odd number of flips
+            if (needsWindingFlip && child.geometry.index) {
+                const idx = child.geometry.index.array;
+                for (let i = 0; i < idx.length; i += 3) {
+                    const tmp = idx[i + 1];
+                    idx[i + 1] = idx[i + 2];
+                    idx[i + 2] = tmp;
+                }
+                child.geometry.index.needsUpdate = true;
+            }
+            pos.needsUpdate = true;
+            if (normal) normal.needsUpdate = true;
+            // Invalidate cached bounding volumes so Box3.setFromObject recomputes
+            child.geometry.boundingBox = null;
+            child.geometry.boundingSphere = null;
+        }
+    });
+}
+
+function fitCurveModel(model, radius, angle, dir, width) {
+    const innerR = radius - width / 2;
+    const outerR = radius + width / 2;
+
+    // Model is a right-turn curve with start at max Z, end at min Z.
+    // Flip geometry vertices instead of using negative scale to avoid rendering artifacts.
+    const needFlipX = dir > 0; // Mirror X for left turns
+    const needFlipZ = true;    // Always flip Z (model start is at max Z)
+    flipModelGeometry(model, needFlipX, needFlipZ);
+
+    const box = new THREE.Box3().setFromObject(model);
+    const modelSize = box.getSize(new THREE.Vector3());
+
+    // Expected bounding box
+    let expMinX, expMaxX;
+    if (dir > 0) {
+        expMinX = -radius + innerR * Math.cos(angle);
+        expMaxX = -radius + outerR;
+    } else {
+        expMinX = radius - outerR;
+        expMaxX = radius - innerR * Math.cos(angle);
+    }
+    const expMaxZ = outerR * Math.sin(angle);
+    const expSizeX = expMaxX - expMinX;
+    const expSizeZ = expMaxZ;
+    const expCenterX = (expMinX + expMaxX) / 2;
+
+    // Scale X/Z to fit the arc footprint, Y based on width scale for consistent barriers
+    const scaleX = expSizeX / modelSize.x;
+    const scaleZ = expSizeZ / modelSize.z;
+    model.scale.set(scaleX, scaleX, scaleZ);
+
+    // Recompute after scaling
+    const scaledBox = new THREE.Box3().setFromObject(model);
+
+    // Align: match bounding box edges to expected bounds
+    model.position.x += expMinX - scaledBox.min.x;
+    model.position.y += 0.15 - scaledBox.min.y;
+    model.position.z += 0 - scaledBox.min.z;
+
+}
+
+function createCurvePiece(def, isPreview = false, colorIndex = 0) {
     const group = new THREE.Group();
     const width = PHYSICS.trackWidth * 2;
     const radius = def.curveRadius;
     const angle = def.curveAngle;
     const dir = def.direction;
+    const pieceColor = isPreview ? 0x666666 : getSequenceColor(colorIndex);
 
-    const segments = 24;
-    const innerR = radius - width / 2;
-    const outerR = radius + width / 2;
+    const modelKey = getCurveModelKey(angle);
+    const placedKey = modelKey + '-placed';
+    const gltfData = trackModelCache[placedKey] || trackModelCache[modelKey];
 
-    const vertices = [];
-    const indices = [];
+    function addCurveModel(data) {
+        const model = data.scene.clone();
+        stripNonMeshNodes(model);
+        fitCurveModel(model, radius, angle, dir, width);
 
-    for (let i = 0; i <= segments; i++) {
-        const t = i / segments;
-        const a = t * angle;
+        model.traverse(child => {
+            if (child.isMesh) {
+                child.material = child.material.clone();
+                child.receiveShadow = true;
+                child.castShadow = true;
+                tameModelMaterial(child.material);
+                child.material.color.setHex(pieceColor);
 
-        let innerX, innerZ, outerX, outerZ;
+                if (isPreview) {
+                    child.material.transparent = true;
+                    child.material.opacity = 0.7;
+                } else {
+                    pieceMaterials.add(child.material);
+                }
+            }
+        });
 
-        if (dir > 0) {
-            innerX = -radius + innerR * Math.cos(a);
-            innerZ = innerR * Math.sin(a);
-            outerX = -radius + outerR * Math.cos(a);
-            outerZ = outerR * Math.sin(a);
-        } else {
-            innerX = radius - innerR * Math.cos(a);
-            innerZ = innerR * Math.sin(a);
-            outerX = radius - outerR * Math.cos(a);
-            outerZ = outerR * Math.sin(a);
-        }
-
-        vertices.push(innerX, 0, innerZ);
-        vertices.push(outerX, 0, outerZ);
-
-        if (i < segments) {
-            const base = i * 2;
-            indices.push(base, base + 1, base + 2);
-            indices.push(base + 1, base + 3, base + 2);
-        }
+        group.add(model);
     }
 
-    const roadGeom = new THREE.BufferGeometry();
-    roadGeom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-    roadGeom.setIndex(indices);
-    roadGeom.computeVertexNormals();
-
-    const roadMat = new THREE.MeshStandardMaterial({
-        color: isPreview ? 0x666666 : getColor('road.color'),
-        roughness: getColor('road.roughness'),
-        transparent: isPreview,
-        opacity: isPreview ? 0.7 : 1,
-        side: THREE.DoubleSide
-    });
-    if (!isPreview) {
-        roadMat.userData.themeKey = 'road.color';
-        pieceMaterials.add(roadMat);
-    }
-    const road = new THREE.Mesh(roadGeom, roadMat);
-    road.position.y = 0.15;
-    road.receiveShadow = true;
-    group.add(road);
-
-    if (!isPreview) {
-        addBarriersToCurve(group, radius, angle, dir, width);
-        addMarkingsToCurve(group, radius, angle, dir);
+    if (gltfData) {
+        addCurveModel(gltfData);
+    } else {
+        preloadTrackModels(() => {
+            const data = trackModelCache[placedKey] || trackModelCache[modelKey];
+            if (data) addCurveModel(data);
+        });
     }
 
     return group;
 }
 
-function createJumpRampPiece(def, isPreview = false) {
+function createJumpRampPiece(def, isPreview = false, colorIndex = 0) {
     const group = new THREE.Group();
     const width = PHYSICS.trackWidth * 2;
     const length = def.length;
@@ -227,33 +411,9 @@ function createJumpRampPiece(def, isPreview = false) {
         top.castShadow = true;
         group.add(top);
 
-        addBarriersToStraight(group, length, width);
+        const obstacleColor = getSequenceColor(colorIndex);
+        addWallsToStraight(group, length, width, obstacleColor);
 
-        // Warning signs at entry
-        [-1, 1].forEach(side => {
-            const signGeom = new THREE.PlaneGeometry(2, 2);
-            const signCanvas = document.createElement('canvas');
-            signCanvas.width = 64;
-            signCanvas.height = 64;
-            const ctx = signCanvas.getContext('2d');
-            ctx.fillStyle = '#ffcc00';
-            ctx.beginPath();
-            ctx.moveTo(32, 5);
-            ctx.lineTo(59, 55);
-            ctx.lineTo(5, 55);
-            ctx.closePath();
-            ctx.fill();
-            ctx.fillStyle = '#000';
-            ctx.font = 'bold 30px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText('!', 32, 48);
-            const signTex = new THREE.CanvasTexture(signCanvas);
-            const signMat = new THREE.MeshBasicMaterial({ map: signTex, transparent: true });
-            const sign = new THREE.Mesh(signGeom, signMat);
-            sign.position.set(side * (PHYSICS.trackWidth + 0.5), 2, 0);
-            sign.rotation.y = side * 0.2;
-            group.add(sign);
-        });
 
         // Calculate ramp angle from geometry
         const rampLength = 6;
@@ -272,7 +432,7 @@ function createJumpRampPiece(def, isPreview = false) {
     return group;
 }
 
-function createSandPitPiece(def, isPreview = false) {
+function createSandPitPiece(def, isPreview = false, colorIndex = 0) {
     const group = new THREE.Group();
     const width = PHYSICS.trackWidth * 2;
     const length = def.length;
@@ -316,32 +476,9 @@ function createSandPitPiece(def, isPreview = false) {
             group.add(bump);
         }
 
-        addBarriersToStraight(group, length, width);
+        const sandWallColor = getSequenceColor(colorIndex);
+        addWallsToStraight(group, length, width, sandWallColor);
 
-        for (let z = 5; z < length - 3; z += 4) {
-            [-1, 1].forEach(side => {
-                const chevGeom = new THREE.PlaneGeometry(1, 1.5);
-                const chevCanvas = document.createElement('canvas');
-                chevCanvas.width = 32;
-                chevCanvas.height = 48;
-                const ctx = chevCanvas.getContext('2d');
-                ctx.fillStyle = '#ff6600';
-                ctx.fillRect(0, 0, 32, 48);
-                ctx.fillStyle = '#fff';
-                ctx.beginPath();
-                ctx.moveTo(16, 5);
-                ctx.lineTo(28, 24);
-                ctx.lineTo(16, 43);
-                ctx.lineTo(4, 24);
-                ctx.closePath();
-                ctx.fill();
-                const chevTex = new THREE.CanvasTexture(chevCanvas);
-                const chevMat = new THREE.MeshBasicMaterial({ map: chevTex });
-                const chev = new THREE.Mesh(chevGeom, chevMat);
-                chev.position.set(side * (PHYSICS.trackWidth - 0.3), 1, z);
-                group.add(chev);
-            });
-        }
 
         group.userData.obstacleZone = {
             type: 'sand',
@@ -353,7 +490,7 @@ function createSandPitPiece(def, isPreview = false) {
     return group;
 }
 
-function createIceSectionPiece(def, isPreview = false) {
+function createIceSectionPiece(def, isPreview = false, colorIndex = 0) {
     const group = new THREE.Group();
     const width = PHYSICS.trackWidth * 2;
     const length = def.length;
@@ -404,29 +541,9 @@ function createIceSectionPiece(def, isPreview = false) {
             group.add(crack);
         }
 
-        addBarriersToStraight(group, length, width);
+        const iceWallColor = getSequenceColor(colorIndex);
+        addWallsToStraight(group, length, width, iceWallColor);
 
-        // Warning signs
-        for (let z = 3; z < length - 3; z += 8) {
-            [-1, 1].forEach(side => {
-                const signGeom = new THREE.PlaneGeometry(1.2, 1.2);
-                const signCanvas = document.createElement('canvas');
-                signCanvas.width = 48;
-                signCanvas.height = 48;
-                const ctx = signCanvas.getContext('2d');
-                ctx.fillStyle = '#0088ff';
-                ctx.fillRect(0, 0, 48, 48);
-                ctx.fillStyle = '#fff';
-                ctx.font = 'bold 28px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText('❄', 24, 34);
-                const signTex = new THREE.CanvasTexture(signCanvas);
-                const signMat = new THREE.MeshBasicMaterial({ map: signTex });
-                const sign = new THREE.Mesh(signGeom, signMat);
-                sign.position.set(side * (PHYSICS.trackWidth - 0.3), 1.2, z);
-                group.add(sign);
-            });
-        }
 
         group.userData.obstacleZone = {
             type: 'ice',
@@ -439,7 +556,7 @@ function createIceSectionPiece(def, isPreview = false) {
 }
 
 // Attempt to find if def specifies a larger transition (for 180° curves, use smaller percentage)
-function createBankedCurvePiece(def, isPreview = false) {
+function createBankedCurvePiece(def, isPreview = false, colorIndex = 0) {
     const group = new THREE.Group();
     const width = PHYSICS.trackWidth * 2;
     const radius = def.curveRadius;
@@ -577,8 +694,9 @@ function createBankedCurvePiece(def, isPreview = false) {
             group.add(wall);
         }
 
-        // Racing stripe on banked surface
-        addMarkingsToCurve(group, radius, angle, dir);
+        // Connector dots
+        const bankedColor = getSequenceColor(colorIndex);
+
 
         // Store obstacle zone data for physics
         group.userData.obstacleZone = {
@@ -595,7 +713,7 @@ function createBankedCurvePiece(def, isPreview = false) {
     return group;
 }
 
-function createBoostPadPiece(def, isPreview = false) {
+function createBoostPadPiece(def, isPreview = false, colorIndex = 0) {
     const group = new THREE.Group();
     const width = PHYSICS.trackWidth * 2;
     const length = def.length;
@@ -716,7 +834,9 @@ function createBoostPadPiece(def, isPreview = false) {
             group.add(sign);
         });
 
-        addBarriersToStraight(group, length, width);
+        const boostWallColor = getSequenceColor(colorIndex);
+        addWallsToStraight(group, length, width, boostWallColor);
+
 
         group.userData.obstacleZone = {
             type: 'boost',
@@ -728,144 +848,124 @@ function createBoostPadPiece(def, isPreview = false) {
     return group;
 }
 
-function createLoopPiece(def, isPreview = false) {
+function createLoopPiece(def, isPreview = false, colorIndex = 0) {
     const group = new THREE.Group();
     const width = PHYSICS.trackWidth * 2;
     const length = def.length;
-    const loopRadius = def.loopRadius || PHYSICS.loopRadius;
+    const R = def.loopRadius || PHYSICS.loopRadius;
+    const loopBottomZ = length / 2;
+    const loopCenterY = R + 0.5;
+    const loopCenterZ = loopBottomZ;
+    const pieceColor = isPreview ? 0x666666 : getSequenceColor(colorIndex);
 
-    // Entry ramp
-    const entryGeom = new THREE.PlaneGeometry(width, 10);
-    const roadMat = new THREE.MeshStandardMaterial({
-        color: isPreview ? 0x666666 : 0x333333,
-        transparent: isPreview,
-        opacity: isPreview ? 0.7 : 1
-    });
-    const entry = new THREE.Mesh(entryGeom, roadMat);
-    entry.rotation.x = -Math.PI / 2;
-    entry.position.y = 0.15;
-    entry.position.z = 5;
-    entry.receiveShadow = true;
-    group.add(entry);
+    function addModel(gltfData) {
+        const model = gltfData.scene.clone();
+        stripNonMeshNodes(model);
+        fitModelToTrack(model, width, length);
 
-    // Exit ramp
-    const exitGeom = new THREE.PlaneGeometry(width, 10);
-    const exit = new THREE.Mesh(exitGeom, roadMat);
-    exit.rotation.x = -Math.PI / 2;
-    exit.position.y = 0.15;
-    exit.position.z = length - 5;
-    exit.receiveShadow = true;
-    group.add(exit);
+        model.traverse(child => {
+            if (child.isMesh) {
+                child.material = child.material.clone();
+                child.receiveShadow = true;
+                child.castShadow = true;
+                tameModelMaterial(child.material);
+                child.material.color.setHex(pieceColor);
 
-    if (!isPreview) {
-        // Create the loop tube
-        const loopSegments = 48;
-        const loopCenter = new THREE.Vector3(0, loopRadius + 0.5, length / 2);
-
-        // Loop track surface (tube-like)
-        const loopVertices = [];
-        const loopIndices = [];
-        const widthSegments = 8;
-
-        for (let i = 0; i <= loopSegments; i++) {
-            const t = i / loopSegments;
-            const theta = t * Math.PI * 2; // Full circle
-
-            const centerY = loopCenter.y + loopRadius * Math.cos(theta);
-            const centerZ = loopCenter.z + loopRadius * Math.sin(theta);
-
-            for (let j = 0; j <= widthSegments; j++) {
-                const w = (j / widthSegments - 0.5) * width;
-                loopVertices.push(w, centerY, centerZ);
-            }
-
-            if (i < loopSegments) {
-                for (let j = 0; j < widthSegments; j++) {
-                    const base = i * (widthSegments + 1) + j;
-                    const next = base + widthSegments + 1;
-                    loopIndices.push(base, next, base + 1);
-                    loopIndices.push(next, next + 1, base + 1);
+                if (isPreview) {
+                    child.material.transparent = true;
+                    child.material.opacity = 0.7;
+                } else {
+                    pieceMaterials.add(child.material);
                 }
             }
-        }
-
-        const loopGeom = new THREE.BufferGeometry();
-        loopGeom.setAttribute('position', new THREE.Float32BufferAttribute(loopVertices, 3));
-        loopGeom.setIndex(loopIndices);
-        loopGeom.computeVertexNormals();
-
-        const loopTheme = getThemeObject('track.loop');
-        const loopMat = new THREE.MeshStandardMaterial({
-            color: loopTheme.color,
-            side: THREE.DoubleSide,
-            metalness: 0.2,
-            roughness: 0.8
-        });
-        loopMat.userData.themeKey = 'track.loop';
-        pieceMaterials.add(loopMat);
-        const loopMesh = new THREE.Mesh(loopGeom, loopMat);
-        loopMesh.receiveShadow = true;
-        loopMesh.castShadow = true;
-        group.add(loopMesh);
-
-        // Support structure
-        const supportMat = new THREE.MeshStandardMaterial({ color: loopTheme.inside });
-        [-1, 1].forEach(side => {
-            const archGeom = new THREE.TorusGeometry(loopRadius + 1, 0.8, 8, 32);
-            const arch = new THREE.Mesh(archGeom, supportMat);
-            arch.position.set(side * (width / 2 + 2), loopRadius + 0.5, length / 2);
-            arch.rotation.y = Math.PI / 2;
-            arch.castShadow = true;
-            group.add(arch);
-
-            // Vertical supports
-            const poleGeom = new THREE.CylinderGeometry(0.5, 0.5, loopRadius * 2 + 2, 8);
-            const pole = new THREE.Mesh(poleGeom, supportMat);
-            pole.position.set(side * (width / 2 + 2), loopRadius, length / 2);
-            pole.castShadow = true;
-            group.add(pole);
         });
 
-        // Warning signs
-        [-1, 1].forEach(side => {
-            const signGeom = new THREE.PlaneGeometry(3, 3);
-            const signCanvas = document.createElement('canvas');
-            signCanvas.width = 96;
-            signCanvas.height = 96;
-            const ctx = signCanvas.getContext('2d');
-            ctx.fillStyle = '#ff6600';
-            ctx.fillRect(0, 0, 96, 96);
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.arc(48, 48, 30, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(48, 78);
-            ctx.lineTo(48, 18);
-            ctx.lineTo(58, 28);
-            ctx.stroke();
-            const signTex = new THREE.CanvasTexture(signCanvas);
-            const signMat = new THREE.MeshBasicMaterial({ map: signTex });
-            const sign = new THREE.Mesh(signGeom, signMat);
-            sign.position.set(side * (PHYSICS.trackWidth + 2), 2.5, 2);
-            group.add(sign);
+        group.add(model);
+    }
+
+    const gltfData = trackModelCache['loop-placed'];
+    if (gltfData) {
+        addModel(gltfData);
+    } else {
+        preloadTrackModels(() => {
+            const data = trackModelCache['loop-placed'];
+            if (data) addModel(data);
         });
+    }
 
-        addBarriersToStraight(group, 10, width); // Entry barriers
-
-        // Barriers for exit section
-        const exitBarrierGroup = new THREE.Group();
-        addBarriersToStraight(exitBarrierGroup, 10, width);
-        exitBarrierGroup.position.z = length - 10;
-        group.add(exitBarrierGroup);
-
+    if (!isPreview) {
         group.userData.obstacleZone = {
             type: 'loop',
-            start: 10,
-            end: length - 10,
-            loopCenter: loopCenter,
-            loopRadius: loopRadius
+            start: 0,
+            end: length,
+            loopCenter: new THREE.Vector3(0, loopCenterY, loopCenterZ),
+            loopRadius: R,
+            loopBottomZ: loopBottomZ
+        };
+    }
+
+    return group;
+}
+
+// Get ramp model variant key based on adjacency
+function getRampModelKey(rampVariant) {
+    switch (rampVariant) {
+        case 'connected-bottom': return 'ramp-connected-bottom';
+        case 'connected-top': return 'ramp-connected-top';
+        case 'connected': return 'ramp-connected';
+        default: return 'ramp-single';
+    }
+}
+
+function createRampPiece(def, isPreview = false, colorIndex = 0, rampVariant = 'single') {
+    const group = new THREE.Group();
+    const width = PHYSICS.trackWidth * 2;
+    const length = def.length;
+    const heightDelta = ELEVATION.HEIGHT_PER_LEVEL * (def.elevationDelta || 1);
+    const pieceColor = isPreview ? 0x666666 : getSequenceColor(colorIndex);
+
+    const modelKey = getRampModelKey(rampVariant);
+
+    function addModel(gltfData) {
+        const model = gltfData.scene.clone();
+        stripNonMeshNodes(model);
+        fitModelToTrack(model, width, length);
+
+        model.traverse(child => {
+            if (child.isMesh) {
+                child.material = child.material.clone();
+                child.receiveShadow = true;
+                child.castShadow = true;
+                tameModelMaterial(child.material);
+                child.material.color.setHex(pieceColor);
+
+                if (isPreview) {
+                    child.material.transparent = true;
+                    child.material.opacity = 0.7;
+                } else {
+                    pieceMaterials.add(child.material);
+                }
+            }
+        });
+
+        group.add(model);
+    }
+
+    const gltfData = trackModelCache[modelKey];
+    if (gltfData) {
+        addModel(gltfData);
+    } else {
+        preloadTrackModels(() => {
+            const data = trackModelCache[modelKey];
+            if (data) addModel(data);
+        });
+    }
+
+    if (!isPreview) {
+        group.userData.obstacleZone = {
+            type: 'ramp',
+            heightDelta: heightDelta,
+            length: length
         };
     }
 
@@ -886,7 +986,9 @@ const meshCreators = {
     'sand-pit': createSandPitPiece,
     'ice-section': createIceSectionPiece,
     'boost-pad': createBoostPadPiece,
-    'loop': createLoopPiece
+    'loop': createLoopPiece,
+    'ramp': createRampPiece,
+    'ramp-steep': createRampPiece
 };
 
 export const PIECE_DEFS = {};

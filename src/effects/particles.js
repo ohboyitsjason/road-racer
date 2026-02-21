@@ -174,7 +174,7 @@ export function emitDriftSmoke(carPosition, carHeading, speed, slipIntensity) {
             });
 
             const smoke = new THREE.Mesh(geometry, material);
-            smoke.position.set(worldX, 0.2, worldZ);
+            smoke.position.set(worldX, carPosition.y - 0.3, worldZ);
 
             // Velocity based on car movement
             const spreadAngle = carHeading + Math.PI + (Math.random() - 0.5) * 0.8;
